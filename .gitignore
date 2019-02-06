@@ -1,3 +1,9 @@
+# project-specific files
+*.hpf
+*.csv
+read
+tags
+
 # Prerequisites
 *.d
 
