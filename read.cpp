@@ -45,26 +45,24 @@ class HPFFile {
             chunkid_data            = 0x3000,
             chunkid_eventdefinition = 0x4000
         };
-        typedef int64_t int64;
-        typedef int32_t int32;
-        typedef int8_t  int8;
-        static const size_t int64_count = chunksz / sizeof(int64);  // number of 64-bit atoms
-        static const size_t int32_count = chunksz / sizeof(int32);  // number of 32-bit atoms
-        static const size_t int8_count   = chunksz / sizeof(int8);  // number of 8-bit atoms
+        static const size_t int64_count = chunksz / sizeof(int64_t);  // number of 64-bit atoms
+        static const size_t int32_count = chunksz / sizeof(int32_t);  // number of 32-bit atoms
+        static const size_t int16_count = chunksz / sizeof(int16_t);  // number of 16-bit atoms
+        static const size_t int8_count  = chunksz / sizeof(int8_t);   // number of 8-bit atoms
 
         // common
-        int64 chunkid; string chunkid_s;
-        int64 chunksize;
+        int64_t chunkid; string chunkid_s;
+        int64_t chunksize;
         string xmldata; // used by header, channelinfo, ...
 
         // header
-        int32 creatorid; string creatorid_s;
-        int64 fileversion;
-        int64 indexchunkoffset;
+        int32_t creatorid; string creatorid_s;
+        int64_t fileversion;
+        int64_t indexchunkoffset;
         
         // channelinfo
-        int32 groupid;
-        int32 numberofchannels;
+        int32_t groupid;
+        int32_t numberofchannels;
 
     private:
         ifstream file;
@@ -73,9 +71,10 @@ class HPFFile {
         size_t cursz;
         //char* buffer;
         union {
-            int64 buffer64[int64_count];
-            int32 buffer32[int32_count];
-            int8 buffer8[int8_count];
+            int64_t buffer64 [int64_count];
+            int32_t buffer32 [int32_count];
+            int16_t buffer16 [int16_count];
+            int8_t  buffer8  [int8_count];
         } u;
     public:
 
@@ -91,6 +90,12 @@ class HPFFile {
         }
 
         void read_chunk(size_t sz = chunksz) {
+            // next step:
+            //    read the first two int64s (chunkid, chunksize)
+            //    using chunksize, update buffer sizes if necessary
+            //    read a further chunksize-(2*sizeof(int64_t)) bytes into the buffer
+            //    set cursz to be chunksize
+            //    the int64_count, etc should probably not be const now, and instead set with each chunk read
             file.read(reinterpret_cast<char*>(&u.buffer64[0]), sz);
             pos = file.tellg();
             cursz = sz;
@@ -104,8 +109,8 @@ class HPFFile {
             chunkid_s = interpret_chunkid(chunkid);
             chunksize = u.buffer64[1];
             if (debug) {
-                cerr << "HPFFile::interpret_chunk:       chunkid            int64  : " << i2hp(chunkid) << " " << chunkid_s << endl;
-                cerr << "HPFFile::interpret_chunk:       chunksize          int64  : " << i2hp(chunksize) << endl;
+                cerr << "HPFFile::interpret_chunk:       chunkid            int64_t  : " << i2hp(chunkid) << " " << chunkid_s << endl;
+                cerr << "HPFFile::interpret_chunk:       chunksize          int64_t  : " << i2hp(chunksize) << endl;
             }
             switch(chunkid) {
                 case chunkid_header:
@@ -119,14 +124,14 @@ class HPFFile {
         void interpret_header() {
             creatorid = u.buffer32[4];
             creatorid_s = interpret_creatorid(creatorid);
-            fileversion = u.buffer32[6] << sizeof(int32) | u.buffer32[5];
+            fileversion = u.buffer32[6] << sizeof(int32_t) | u.buffer32[5];
             indexchunkoffset = u.buffer32[8] << sizeof(32) | u.buffer32[7];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[9]));
             if (debug) {
-                cerr << "HPFFile::interpret_header:      creatorid          int32  : " << i2hp(creatorid) << " FourCC '" << creatorid_s << "'" << endl;
-                cerr << "HPFFile::interpret_header:      fileversion        int64  : " << i2hp(fileversion) << endl;
-                cerr << "HPFFile::interpret_header:      indexchunkoffset   int64  : " << i2hp(indexchunkoffset) << endl;
-                cerr << "HPFFile::interpret_header:      xmldata            char[] : " << xmldata << endl;
+                cerr << "HPFFile::interpret_header:      creatorid          int32_t  : " << i2hp(creatorid) << " FourCC '" << creatorid_s << "'" << endl;
+                cerr << "HPFFile::interpret_header:      fileversion        int64_t  : " << i2hp(fileversion) << endl;
+                cerr << "HPFFile::interpret_header:      indexchunkoffset   int64_t  : " << i2hp(indexchunkoffset) << endl;
+                cerr << "HPFFile::interpret_header:      xmldata            char[]   : " << xmldata << endl;
             }
         }
         void interpret_channelinfo() {
@@ -134,13 +139,13 @@ class HPFFile {
             numberofchannels = u.buffer32[5];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[6]));
             if (debug) {
-                cerr << "HPFFile::interpret_channelinfo: groupid            int32  : " << groupid << " " << i2hp(groupid) << endl;
-                cerr << "HPFFile::interpret_channelinfo: numberofchannels   int32  : " << numberofchannels << " " << i2hp(numberofchannels) << endl;
-                cerr << "HPFFile::interpret_channelinfo: xmldata            char[] : " << xmldata << endl;
+                cerr << "HPFFile::interpret_channelinfo: groupid            int32_t  : " << groupid << " " << i2hp(groupid) << endl;
+                cerr << "HPFFile::interpret_channelinfo: numberofchannels   int32_t  : " << numberofchannels << " " << i2hp(numberofchannels) << endl;
+                cerr << "HPFFile::interpret_channelinfo: xmldata            char[]   : " << xmldata << endl;
             }
         }
 
-        string interpret_chunkid(const int64& id) {
+        string interpret_chunkid(const int64_t& id) {
             string s;
             switch(id) {
                 case chunkid_header:
@@ -157,7 +162,7 @@ class HPFFile {
             return s;
         }
 
-        string interpret_creatorid(const int32& id) {  // this is a FourCC string: 'datx'
+        string interpret_creatorid(const int32_t& id) {  // this is a FourCC string: 'datx'
             string s;
             const int8_t * p = reinterpret_cast<const int8_t * const>(&id);
             s += p[0]; s += p[1]; s += p[2]; s += p[3];
@@ -182,7 +187,7 @@ class HPFFile {
             cerr << "HPFFile::file_status: " << filename << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" << " cursz[size of last chunk read]=" << i2h(cursz) << endl;
         }
         void dump() {
-            cerr << "HPFFile::dump: chunksz=" << chunksz << " sizeof(int64)=" << sizeof(int64) << " int64_count=" << int64_count << " filename='" << filename << "' pos=" << pos << endl;
+            cerr << "HPFFile::dump: chunksz=" << chunksz << " sizeof(int64_t)=" << sizeof(int64_t) << " int64_count=" << int64_count << " filename='" << filename << "' pos=" << pos << endl;
             file_status(true);
         }
 };
