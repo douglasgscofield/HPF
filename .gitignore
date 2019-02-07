@@ -3,6 +3,9 @@
 *.csv
 read
 tags
+x
+y
+z
 
 # Prerequisites
 *.d

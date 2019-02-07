@@ -33,12 +33,13 @@ std::string i2h( T i )
   return stream.str();
 }
 
-int64_t ww2W( int32_t w1, int32_t w2 )
+uint64_t ww2W( uint32_t w1, uint32_t w2 )
 {
-  int64_t ans = static_cast<uint64_t>(w1) << sizeof(w1);
-  ans |= w2;
-  return ans;
+    uint64_t ans = static_cast<uint64_t>(w1) << sizeof(w1)*8;
+    ans |= w2;
+    return ans;
 }
+
 
 class HPFFile {
     // HPFFile opens a binary file, considering it HPF format, and reads/converts chunk data
