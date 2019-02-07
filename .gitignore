@@ -1,11 +1,13 @@
 # project-specific files
 *.hpf
 *.csv
-read
+hpf
 tags
 x
 y
 z
+*.dSYM
+
 
 # Prerequisites
 *.d

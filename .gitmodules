@@ -1,0 +1,6 @@
+[submodule "lib/tinyxml2"]
+	path = lib/tinyxml2
+	url = https://github.com/leethomason/tinyxml2
+[submodule "lib/tinyxml2-ex"]
+	path = lib/tinyxml2-ex
+	url = https://github.com/stanthomas/tinyxml2-ex
