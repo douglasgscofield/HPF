@@ -33,6 +33,13 @@ std::string i2h( T i )
   return stream.str();
 }
 
+int64_t ww2W( int32_t w1, int32_t w2 )
+{
+  int64_t ans = static_cast<uint64_t>(w1) << sizeof(w1);
+  ans |= w2;
+  return ans;
+}
+
 class HPFFile {
     // HPFFile opens a binary file, considering it HPF format, and reads/converts chunk data
     public:
@@ -124,8 +131,8 @@ class HPFFile {
         void interpret_header() {
             creatorid = u.buffer32[4];
             creatorid_s = interpret_creatorid(creatorid);
-            fileversion = u.buffer32[6] << sizeof(int32_t) | u.buffer32[5];
-            indexchunkoffset = u.buffer32[8] << sizeof(32) | u.buffer32[7];
+            fileversion = ww2W(u.buffer32[6], u.buffer32[5]);
+            indexchunkoffset = ww2W(u.buffer32[8], u.buffer32[7]);
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[9]));
             if (debug) {
                 cerr << "HPFFile::interpret_header:      creatorid          int32_t  : " << i2hp(creatorid) << " FourCC '" << creatorid_s << "'" << endl;
@@ -170,21 +177,25 @@ class HPFFile {
         }
 
 
-        void file_status(const bool verbose = false) {
+        bool file_status(const bool verbose = false) {
             streampos beg, end, here;
+            auto o = file.is_open();
             if (verbose) {
-                cerr << "HPFFile::file_status(verbose): " << filename << " is " << (file.is_open() ? "" : "not ") << "open" << endl;
+                cerr << "HPFFile::file_status(verbose): " << filename << " is " << (o ? "" : "not ") << "open" << endl;
             }
-            here = file.tellg();
-            auto here_chunks = static_cast<double>(here) / chunksz;  // cast so division is double to catch fractional chunks
-            file.seekg(0, ios::beg);
-            beg = file.tellg();
-            file.seekg(0, ios::end);
-            end = file.tellg();
-            file.seekg(here);
-            if (verbose)
-                cerr << "HPFFile::file_status(verbose): " << filename << " size is " << (end - beg) << " bytes" << endl;
-            cerr << "HPFFile::file_status: " << filename << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" << " cursz[size of last chunk read]=" << i2h(cursz) << endl;
+            if (o) {
+                here = file.tellg();
+                auto here_chunks = static_cast<double>(here) / chunksz;  // cast so division is double to catch fractional chunks
+                file.seekg(0, ios::beg);
+                beg = file.tellg();
+                file.seekg(0, ios::end);
+                end = file.tellg();
+                file.seekg(here);
+                if (verbose)
+                    cerr << "HPFFile::file_status(verbose): " << filename << " size is " << (end - beg) << " bytes" << endl;
+                cerr << "HPFFile::file_status: " << filename << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" << " cursz[size of last chunk read]=" << i2h(cursz) << endl;
+            }
+            return o;
         }
         void dump() {
             cerr << "HPFFile::dump: chunksz=" << chunksz << " sizeof(int64_t)=" << sizeof(int64_t) << " int64_count=" << int64_count << " filename='" << filename << "' pos=" << pos << endl;
@@ -195,6 +206,8 @@ class HPFFile {
 int main ()
 {
     HPFFile h("t.hpf");
+    if (! h.file_status())
+        exit(1);
     h.read_chunk();
     h.read_chunk();
     h.read_chunk();
