@@ -22,6 +22,17 @@ I haven't been able to find similar QuickDAQ docs which provide similar informat
 
 As I learn them, I'll include QuickDAQ specifics here.
 
+So all six chunk types defined in the document are now read and partially interpreted.
+The document also names a trigger chunk, but provides no definition.
+The test file does not contain index chunks that I have found so far, and I have not yet found an eventdata chunk, but perhaps that is part of the data chunk.
+In the list below, chunk types are marked with tags that indicate special data that remains to be further interpreted.
+
+* header (xml for RecordingDate)
+* channelinfo (xml for ChannelInformationData)
+* data (structured data)
+* eventdefinition (xml for EventDefinitionData)
+* eventdata (structured data)
+* index (structured data indexing data into chunk positions)
 
 
 XML

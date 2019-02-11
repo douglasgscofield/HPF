@@ -334,6 +334,8 @@ class HPFFile {
                     s = "eventdefinition"; break;
                 case chunkid_eventdata:
                     s = "eventdata"; break;
+                case chunkid_index:
+                    s = "index"; break;
                 default:
                     s = "UNKNOWN_" + i2h(id); break;
             }
