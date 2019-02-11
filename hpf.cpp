@@ -47,16 +47,18 @@ uint64_t ww2W( uint32_t w1, uint32_t w2 )
 class HPFFile {
     // HPFFile opens a binary file, considering it HPF format, and reads/converts chunk data
     public:
+        const string cnm = "HPFFile";
         bool debug = true;  // if true, print lots of info
         // 64kb aligned on atom boundaries
-        static const size_t chunksz = 64 * 1024; // 64KB
-        static const size_t buffersz = 1024 * 1024; // 1024KB
+        static const size_t chunksz = 64 * 1024; // 64KB chunks are the default with HPF files
+        static const size_t buffersz = 1024 * 1024; // 1024KB is the largest chunk size we allow for now
         enum {
             chunkid_header          = 0x1000,
             chunkid_channelinfo     = 0x2000,
             chunkid_data            = 0x3000,
             chunkid_eventdefinition = 0x4000,
-            chunkid_eventdata       = 0x5000
+            chunkid_eventdata       = 0x5000,
+            chunkid_index           = 0x6000
         };
         static const size_t int64_count = buffersz / sizeof(int64_t);  // number of 64-bit atoms
         static const size_t int32_count = buffersz / sizeof(int32_t);  // number of 32-bit atoms
@@ -88,8 +90,6 @@ class HPFFile {
         ChannelDescriptor* channeldescriptor;
         int32_t* data;
 
-        
-
         // eventdefinition
         int32_t definitioncount;
 
@@ -110,6 +110,17 @@ class HPFFile {
         } Event;
         Event* event;
 
+        // index
+        int64_t indexcount;
+        typedef struct _Index {
+            int64_t datastartindex;
+            int64_t perchanneldatalengthinsamples;
+            int64_t chunkid;
+            int64_t groupid;
+            int64_t fileoffset;
+        } Index;
+        Index* index;
+
 
     private:
         ifstream file;
@@ -123,6 +134,12 @@ class HPFFile {
             int16_t buffer16 [int16_count];
             int8_t  buffer8  [int8_count];
         } u;
+        string pfx(const string& p, const int w = 36) {
+            stringstream s;
+            s.width(w);
+            s << std::left << (p + ":");
+            return s.str();
+        }
     public:
 
         HPFFile(const string& fn)
@@ -137,6 +154,7 @@ class HPFFile {
         }
 
         void read_chunk(size_t sz = chunksz) {
+            const string p = pfx(cnm + "::" + "read_chunk", 25);
             // read the first two int64 words
             // using word[1], determine buffer size
             // reposition to prior to the first two words, and read word[1] bytes into the buffer
@@ -145,13 +163,16 @@ class HPFFile {
             streampos here = file.tellg();
             file.read(reinterpret_cast<char*>(&twowords[0]), 16);  // read the first two words
             if (debug) {
-                cerr << "HPFFile::read_chunk:  here=" << here << " first two 64-bit words: twowords[0]=chunkid=" << i2h(twowords[0]) << " twowords[1]=chunksize=" << i2h(twowords[1]) << endl;
-                cerr << "HPFFile::read_chunk:  repositioning to " << here << " and reading " << i2h(twowords[1]) << " " << twowords[1] << " bytes" << endl;
+                cerr << p << "here=" << here 
+                    << " first two 64-bit words: twowords[0]=chunkid=" << i2h(twowords[0]) 
+                    << " twowords[1]=chunksize=" << i2h(twowords[1]) 
+                    << endl;
+                cerr << p << "repositioning to " << here << " and reading " << i2h(twowords[1]) << " " << twowords[1] << " bytes" << endl;
             }
             file.seekg(here);
             sz = twowords[1];
             if (sz > buffersz) {
-                cerr << "HPFFile::read_chunk: buffer size " << i2h(buffersz) << " is too small for chunk size " << i2h(sz) << endl;
+                cerr << p << "buffer size " << i2h(buffersz) << " is too small for chunk size " << i2h(sz) << endl;
                 exit(1);
             }
             chunkbaseaddress = reinterpret_cast<char*>(&u.buffer64[0]);
@@ -164,13 +185,14 @@ class HPFFile {
         }
 
         void interpret_chunk() {
+            const string p = pfx(cnm + "::" + "interpret_chunk");
             chunkid = u.buffer64[0];
             chunkid_s = interpret_chunkid(chunkid);
             chunksize = u.buffer64[1];
             if (debug) {
-                cerr << "HPFFile::interpret_chunk:           chunkbaseaddress   char*    : " << i2hp(chunkbaseaddress) << endl;
-                cerr << "HPFFile::interpret_chunk:           chunkid            int64_t  : " << chunkid << " " << i2hp(chunkid) << " " << chunkid_s << endl;
-                cerr << "HPFFile::interpret_chunk:           chunksize          int64_t  : " << chunksize << " " << i2hp(chunksize) << endl;
+                cerr << p << "chunkbaseaddress   char*    : " << i2hp(chunkbaseaddress) << endl;
+                cerr << p << "chunkid            int64_t  : " << chunkid << " " << i2hp(chunkid) << " " << chunkid_s << endl;
+                cerr << p << "chunksize          int64_t  : " << chunksize << " " << i2hp(chunksize) << endl;
             }
             switch(chunkid) {
                 case chunkid_header:
@@ -183,34 +205,45 @@ class HPFFile {
                     interpret_eventdefinition(); break;
                 case chunkid_eventdata:
                     interpret_eventdata(); break;
+                case chunkid_index:
+                    interpret_index(); break;
+                default:
+                    cerr << p << "unknown chunkid " << i2h(chunkid) << endl;
+                    exit(1);
             }
             if (debug)
                 cerr << endl;
         }
+
         void interpret_header() {
+            const string p = pfx(cnm + "::" + "interpret_header");
             creatorid = u.buffer32[4];
             creatorid_s = interpret_creatorid(creatorid);
             fileversion = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
             indexchunkoffset = *(reinterpret_cast<int64_t*>(&u.buffer32[7]));
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[9]));
             if (debug) {
-                cerr << "HPFFile::interpret_header:          creatorid          int32_t  : " << i2hp(creatorid) << " FourCC '" << creatorid_s << "'" << endl;
-                cerr << "HPFFile::interpret_header:          fileversion        int64_t  : " << i2hp(fileversion) << endl;
-                cerr << "HPFFile::interpret_header:          indexchunkoffset   int64_t  : " << i2hp(indexchunkoffset) << endl;
-                cerr << "HPFFile::interpret_header:          xmldata            char[]   : " << xmldata << endl;
+                cerr << p << "creatorid          int32_t  : " << i2hp(creatorid) << " FourCC '" << creatorid_s << "'" << endl;
+                cerr << p << "fileversion        int64_t  : " << i2hp(fileversion) << endl;
+                cerr << p << "indexchunkoffset   int64_t  : " << i2hp(indexchunkoffset) << endl;
+                cerr << p << "xmldata            char[]   : " << xmldata << endl;
             }
         }
+
         void interpret_channelinfo() {
+            const string p = pfx(cnm + "::" + "interpret_channelinfo");
             groupid = u.buffer32[4];
             numberofchannels = u.buffer32[5];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[6]));
             if (debug) {
-                cerr << "HPFFile::interpret_channelinfo:     groupid            int32_t  : " << groupid << " " << i2h(groupid) << endl;
-                cerr << "HPFFile::interpret_channelinfo:     numberofchannels   int32_t  : " << numberofchannels << " " << i2h(numberofchannels) << endl;
-                cerr << "HPFFile::interpret_channelinfo:     xmldata            char[]   : " << xmldata << endl;
+                cerr << p << "groupid            int32_t  : " << groupid << " " << i2h(groupid) << endl;
+                cerr << p << "numberofchannels   int32_t  : " << numberofchannels << " " << i2h(numberofchannels) << endl;
+                cerr << p << "xmldata            char[]   : " << xmldata << endl;
             }
         }
+
         void interpret_data() {
+            const string p = pfx(cnm + "::" + "interpret_data");
             groupid = u.buffer32[4];
             datastartindex = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
             channeldatacount = u.buffer32[7];
@@ -221,35 +254,72 @@ class HPFFile {
             }
             int32_t* data = &u.buffer32[8 + (2*channeldatacount)];
             if (debug) {
-                cerr << "HPFFile::interpret_data:            groupid            int32_t  : " << i2h(groupid) << " " << groupid << endl;
-                cerr << "HPFFile::interpret_data:            datastartindex     int64_t  : " << i2h(datastartindex) << " " << datastartindex << endl;
-                cerr << "HPFFile::interpret_data:            channeldatacount   int32_t  : " << i2h(channeldatacount) << " " << channeldatacount << endl;
-                cerr << "HPFFile::interpret_data:            ChannelDescriptor* channeldescriptor[]  : " << endl;
-                for (auto i = 0; i < channeldatacount; ++i)
-                    cerr << "HPFFile::interpret_data:            " << i << " offset=" << i2hp(channeldescriptor[i].offset) << " length=" << i2hp(channeldescriptor[i].length) << endl;
+                cerr << p << "groupid            int32_t  : " << i2h(groupid) << " " << groupid << endl;
+                cerr << p << "datastartindex     int64_t  : " << i2h(datastartindex) << " " << datastartindex << endl;
+                cerr << p << "channeldatacount   int32_t  : " << i2h(channeldatacount) << " " << channeldatacount << endl;
+                cerr << p << "ChannelDescriptor* channeldescriptor[]  : " << endl;
+                for (auto i = 0; i < channeldatacount; ++i) {
+                    cerr << p << std::setw(3) << std::right << i 
+                        << " offset=" << i2hp(channeldescriptor[i].offset) 
+                        << " length=" << i2hp(channeldescriptor[i].length) 
+                        << endl;
+                }
                 uint64_t offsetfromchunkbase = reinterpret_cast<char*>(data) - chunkbaseaddress;
-                cerr << "HPFFile::interpret_data:            int32_t*           data[]   : " << i2hp(data) << " offsetfromchunkbase=" << i2h(offsetfromchunkbase) << " " << offsetfromchunkbase << endl;
+                cerr << p << "int32_t*           data[]   : " << i2hp(data) 
+                    << " offsetfromchunkbase=" << i2h(offsetfromchunkbase) << " " << offsetfromchunkbase 
+                    << endl;
             }
             delete[] channeldescriptor;
         }
 
         void interpret_eventdefinition() {
+            const string p = pfx(cnm + "::" + "interpret_eventdefinition");
             definitioncount = u.buffer32[4];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[5]));
             if (debug) {
-                cerr << "HPFFile::interpret_eventdefinition: definitioncount    int32_t  : " << i2h(definitioncount) << " " << definitioncount << endl;
-                cerr << "HPFFile::interpret_eventdefinition: xmldata            char[]   : " << xmldata << endl;
+                cerr << p << "definitioncount    int32_t  : " << i2h(definitioncount) << " " << definitioncount << endl;
+                cerr << p << "xmldata            char[]   : " << xmldata << endl;
             }
         }
+
         void interpret_eventdata() {
+            const string p = pfx(cnm + "::" + "interpret_eventdata");
             eventcount = u.buffer64[2];
             event = new Event[eventcount];
             if (debug) {
-                cerr << "HPFFile::interpret_eventdata:       eventcount         int64_t  : " << eventcount << " " << i2hp(eventcount) << endl;
-                cerr << "HPFFile::interpret_eventdata:       Event*             event[]  : " << i2hp(event) << endl;
+                cerr << p << "eventcount         int64_t  : " << eventcount << " " << i2hp(eventcount) << endl;
+                cerr << p << "Event*             event[]  : " << i2hp(event) << endl;
             }
             delete[] event;
         }
+
+        void interpret_index() {
+            const string p = pfx(cnm + "::" + "interpret_index");
+            indexcount = u.buffer64[2];
+            index = new Index[indexcount];
+            for (auto i = 0; i < indexcount; ++i) {
+                index[i].datastartindex                = u.buffer64[3 + (2*i)];
+                index[i].perchanneldatalengthinsamples = u.buffer64[4 + (2*i)];
+                index[i].chunkid                       = u.buffer64[5 + (2*i)];
+                index[i].groupid                       = u.buffer64[6 + (2*i)];
+                index[i].fileoffset                    = u.buffer64[7 + (2*i)];
+            }
+            if (debug) {
+                cerr << p << "indexcount         int64_t  : " << i2h(indexcount) << " " << indexcount << endl;
+                cerr << p << "Index*             index[]  : " << endl;
+                for (auto i = 0; i < indexcount; ++i) {
+                    cerr << p << std::setw(10) << std::right << i 
+                        << " datastartindex=" << i2h(index[i].datastartindex) 
+                        << " perchanneldatalengthinsamples=" << i2h(index[i].perchanneldatalengthinsamples) 
+                        << " chunkid=" << i2h(index[i].chunkid) 
+                        << " groupid=" << i2h(index[i].groupid) 
+                        << " fileoffset=" << i2h(index[i].fileoffset) 
+                        << endl;
+                }
+            }
+            delete[] index;
+        }
+
 
         string interpret_chunkid(const int64_t& id) {
             string s;
@@ -278,10 +348,12 @@ class HPFFile {
 
 
         bool file_status(const bool verbose = false) {
+            const string p = pfx(cnm + "::" + "file_status", 25);
+            const string pv = pfx(cnm + "::" + "file_status(verbose)", 30);
             streampos beg, end, here;
             auto o = file.is_open();
             if (verbose) {
-                cerr << "HPFFile::file_status(verbose): " << filename << " is " << (o ? "" : "not ") << "open" << endl;
+                cerr << pv << filename << " is " << (o ? "" : "not ") << "open" << endl;
             }
             if (o) {
                 here = file.tellg();
@@ -292,13 +364,22 @@ class HPFFile {
                 end = file.tellg();
                 file.seekg(here);
                 if (verbose)
-                    cerr << "HPFFile::file_status(verbose): " << filename << " size is " << (end - beg) << " bytes" << endl;
-                cerr << "HPFFile::file_status: " << filename << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" << " cursz[size of last chunk read]=" << i2h(cursz) << endl;
+                    cerr << pv << filename << " size is " << (end - beg) << " bytes" << endl;
+                cerr << p << filename 
+                    << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" 
+                    << " cursz[size of last chunk read]=" << i2h(cursz) 
+                    << endl;
             }
             return o;
         }
         void dump() {
-            cerr << "HPFFile::dump: chunksz=" << chunksz << " sizeof(int64_t)=" << sizeof(int64_t) << " int64_count=" << int64_count << " filename='" << filename << "' pos=" << pos << endl;
+            const string p = pfx(cnm + "::" + "dump", 20);
+            cerr << p << "chunksz=" << chunksz 
+                << " sizeof(int64_t)=" << sizeof(int64_t) 
+                << " int64_count=" << int64_count 
+                << " filename=" << filename 
+                << " pos=" << pos 
+                << endl;
             file_status(true);
         }
 };
