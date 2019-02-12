@@ -168,7 +168,7 @@ class HPFFile
         ////
         void read_chunk(size_t sz = chunksz)
         {
-            const string p = pfx(cnm + "::" + "read_chunk", 25);
+            static const string p = pfx(cnm + "::" + "read_chunk", 25);
             // read the first two int64 words
             // using word[1], determine buffer size
             // reposition to prior to the first two words, and read word[1] bytes into the buffer
@@ -178,8 +178,8 @@ class HPFFile
             file.read(reinterpret_cast<char*>(&twowords[0]), 16);  // read the first two words
             if (debug) {
                 cerr << p << "here=" << here 
-                    << " first two 64-bit words: twowords[0]=chunkid=" << i2h(twowords[0]) 
-                    << " twowords[1]=chunksize=" << i2h(twowords[1]) 
+                    << " first two 64-bit words: twowords[0]=chunkid=" << i2hp(twowords[0]) 
+                    << " twowords[1]=chunksize=" << i2hp(twowords[1]) 
                     << endl;
                 cerr << p << "repositioning to " << here << " and reading " << i2h(twowords[1]) << " " << twowords[1] << " bytes" << endl;
             }
@@ -200,7 +200,7 @@ class HPFFile
 
         void interpret_chunk()
         {
-            const string p = pfx(cnm + "::" + "interpret_chunk");
+            static const string p = pfx(cnm + "::" + "interpret_chunk");
             chunkid = u.buffer64[0];
             chunkid_s = interpret_chunkid(chunkid);
             chunksize = u.buffer64[1];
@@ -232,7 +232,7 @@ class HPFFile
 
         void interpret_header()
         {
-            const string p = pfx(cnm + "::" + "interpret_header");
+            static const string p = pfx(cnm + "::" + "interpret_header");
             creatorid = u.buffer32[4];
             creatorid_s = interpret_creatorid(creatorid);
             fileversion = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
@@ -248,7 +248,7 @@ class HPFFile
 
         void interpret_channelinfo()
         {
-            const string p = pfx(cnm + "::" + "interpret_channelinfo");
+            static const string p = pfx(cnm + "::" + "interpret_channelinfo");
             groupid = u.buffer32[4];
             numberofchannels = u.buffer32[5];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[6]));
@@ -261,7 +261,7 @@ class HPFFile
 
         void interpret_data()
         {
-            const string p = pfx(cnm + "::" + "interpret_data");
+            static const string p = pfx(cnm + "::" + "interpret_data");
             groupid = u.buffer32[4];
             datastartindex = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
             channeldatacount = u.buffer32[7];
@@ -292,7 +292,7 @@ class HPFFile
 
         void interpret_eventdefinition()
         {
-            const string p = pfx(cnm + "::" + "interpret_eventdefinition");
+            static const string p = pfx(cnm + "::" + "interpret_eventdefinition");
             definitioncount = u.buffer32[4];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[5]));
             if (debug) {
@@ -303,7 +303,7 @@ class HPFFile
 
         void interpret_eventdata()
         {
-            const string p = pfx(cnm + "::" + "interpret_eventdata");
+            static const string p = pfx(cnm + "::" + "interpret_eventdata");
             eventcount = u.buffer64[2];
             event = new Event[eventcount];
             if (debug) {
@@ -315,7 +315,7 @@ class HPFFile
 
         void interpret_index()
         {
-            const string p = pfx(cnm + "::" + "interpret_index");
+            static const string p = pfx(cnm + "::" + "interpret_index");
             indexcount = u.buffer64[2];
             index = new Index[indexcount];
             for (auto i = 0; i < indexcount; ++i) {
@@ -384,8 +384,8 @@ class HPFFile
         ////
         bool file_status(const bool verbose = false)
         {
-            const string p = pfx(cnm + "::" + "file_status", 25);
-            const string pv = pfx(cnm + "::" + "file_status(verbose)", 30);
+            static const string p = pfx(cnm + "::" + "file_status", 25);
+            static const string pv = pfx(cnm + "::" + "file_status(verbose)", 30);
             streampos beg, end, here;
             auto o = file.is_open();
             if (verbose) {
@@ -411,7 +411,7 @@ class HPFFile
 
         void dump()
         {
-            const string p = pfx(cnm + "::" + "dump", 20);
+            static const string p = pfx(cnm + "::" + "dump", 20);
             cerr << p << "chunksz=" << chunksz 
                 << " sizeof(int64_t)=" << sizeof(int64_t) 
                 << " int64_count=" << int64_count 
