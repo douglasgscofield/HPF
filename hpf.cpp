@@ -13,18 +13,16 @@
 #include <vector>
 using namespace std;
 
-// handy int-to-hex printer, from https://stackoverflow.com/questions/5100718/integer-to-hex-string-in-c
+// handy int-to-hex printer padded to var nibble width, from https://stackoverflow.com/questions/5100718/integer-to-hex-string-in-c
 template< typename T >
 std::string i2hp( T i )
 {
   std::stringstream stream;
-  stream << "0x" 
-         << std::setfill ('0') << std::setw(sizeof(T)*2) 
-         << std::hex << i;
+  stream << "0x" << std::setfill ('0') << std::setw(sizeof(T)*2) << std::hex << i;
   return stream.str();
 }
 
-// my mod
+// mod for unpadded int-to-hex
 template< typename T >
 std::string i2h( T i )
 {
@@ -33,25 +31,58 @@ std::string i2h( T i )
   return stream.str();
 }
 
-uint64_t ww2W( uint32_t w1, uint32_t w2 )
+
+
+
+class HPFFile
 {
-    // I may not need this... turns out I can do
-    //     fileversion = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
-    // to get an int64_t from a 32-bit aligned boundary no problem.
-    uint64_t ans = static_cast<uint64_t>(w1) << sizeof(w1)*8;
-    ans |= w2;
-    return ans;
-}
+    ////
+    //// HPFFile opens a binary file, considering it HPF format, and reads/converts chunk data
+    ////
 
-
-class HPFFile {
-    // HPFFile opens a binary file, considering it HPF format, and reads/converts chunk data
     public:
+
         const string cnm = "HPFFile";
         bool debug = true;  // if true, print lots of info
-        // 64kb aligned on atom boundaries
+
+        ////
+        //// buffer
+        ////
         static const size_t chunksz = 64 * 1024; // 64KB chunks are the default with HPF files
         static const size_t buffersz = 1024 * 1024; // 1024KB is the largest chunk size we allow for now
+
+        static const size_t int64_count = buffersz / sizeof(int64_t);  // number of 64-bit atoms
+        static const size_t int32_count = buffersz / sizeof(int32_t);  // number of 32-bit atoms
+        static const size_t int16_count = buffersz / sizeof(int16_t);  // number of 16-bit atoms
+        static const size_t int8_count  = buffersz / sizeof(int8_t);   // number of 8-bit atoms
+
+    private:
+
+        ifstream file;
+        const string filename;
+        size_t pos;
+        size_t cursz;
+        union {  // union to allow access to the buffer containing buffersz bytes at whichever atom size we wish
+            int64_t buffer64 [int64_count];
+            int32_t buffer32 [int32_count];
+            int16_t buffer16 [int16_count];
+            int8_t  buffer8  [int8_count];
+        } u;
+
+        string pfx(const string& p, const int w = 36)  // standardised prefix for debug output lines
+        {
+            stringstream s;
+            s.width(w);
+            s << std::left << (p + ":");
+            return s.str();
+        }
+
+
+    public:
+
+        ////
+        //// chunk contents, for all chunk types
+        ////
         enum {
             chunkid_header          = 0x1000,
             chunkid_channelinfo     = 0x2000,
@@ -60,10 +91,6 @@ class HPFFile {
             chunkid_eventdata       = 0x5000,
             chunkid_index           = 0x6000
         };
-        static const size_t int64_count = buffersz / sizeof(int64_t);  // number of 64-bit atoms
-        static const size_t int32_count = buffersz / sizeof(int32_t);  // number of 32-bit atoms
-        static const size_t int16_count = buffersz / sizeof(int16_t);  // number of 16-bit atoms
-        static const size_t int8_count  = buffersz / sizeof(int8_t);   // number of 8-bit atoms
 
         // common
         char*   chunkbaseaddress;
@@ -122,24 +149,6 @@ class HPFFile {
         Index* index;
 
 
-    private:
-        ifstream file;
-        const string filename;
-        size_t pos;
-        size_t cursz;
-        //char* buffer;
-        union {
-            int64_t buffer64 [int64_count];
-            int32_t buffer32 [int32_count];
-            int16_t buffer16 [int16_count];
-            int8_t  buffer8  [int8_count];
-        } u;
-        string pfx(const string& p, const int w = 36) {
-            stringstream s;
-            s.width(w);
-            s << std::left << (p + ":");
-            return s.str();
-        }
     public:
 
         HPFFile(const string& fn)
@@ -149,11 +158,16 @@ class HPFFile {
             if (debug)
                 dump();
         }
-        ~HPFFile() {
+        ~HPFFile()
+        {
             file.close();
         }
 
-        void read_chunk(size_t sz = chunksz) {
+        ////
+        //// public methods for reading and interpreting chunk contents
+        ////
+        void read_chunk(size_t sz = chunksz)
+        {
             const string p = pfx(cnm + "::" + "read_chunk", 25);
             // read the first two int64 words
             // using word[1], determine buffer size
@@ -184,7 +198,8 @@ class HPFFile {
             interpret_chunk();
         }
 
-        void interpret_chunk() {
+        void interpret_chunk()
+        {
             const string p = pfx(cnm + "::" + "interpret_chunk");
             chunkid = u.buffer64[0];
             chunkid_s = interpret_chunkid(chunkid);
@@ -215,7 +230,8 @@ class HPFFile {
                 cerr << endl;
         }
 
-        void interpret_header() {
+        void interpret_header()
+        {
             const string p = pfx(cnm + "::" + "interpret_header");
             creatorid = u.buffer32[4];
             creatorid_s = interpret_creatorid(creatorid);
@@ -230,7 +246,8 @@ class HPFFile {
             }
         }
 
-        void interpret_channelinfo() {
+        void interpret_channelinfo()
+        {
             const string p = pfx(cnm + "::" + "interpret_channelinfo");
             groupid = u.buffer32[4];
             numberofchannels = u.buffer32[5];
@@ -242,7 +259,8 @@ class HPFFile {
             }
         }
 
-        void interpret_data() {
+        void interpret_data()
+        {
             const string p = pfx(cnm + "::" + "interpret_data");
             groupid = u.buffer32[4];
             datastartindex = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
@@ -272,7 +290,8 @@ class HPFFile {
             delete[] channeldescriptor;
         }
 
-        void interpret_eventdefinition() {
+        void interpret_eventdefinition()
+        {
             const string p = pfx(cnm + "::" + "interpret_eventdefinition");
             definitioncount = u.buffer32[4];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[5]));
@@ -282,7 +301,8 @@ class HPFFile {
             }
         }
 
-        void interpret_eventdata() {
+        void interpret_eventdata()
+        {
             const string p = pfx(cnm + "::" + "interpret_eventdata");
             eventcount = u.buffer64[2];
             event = new Event[eventcount];
@@ -293,7 +313,8 @@ class HPFFile {
             delete[] event;
         }
 
-        void interpret_index() {
+        void interpret_index()
+        {
             const string p = pfx(cnm + "::" + "interpret_index");
             indexcount = u.buffer64[2];
             index = new Index[indexcount];
@@ -320,8 +341,13 @@ class HPFFile {
             delete[] index;
         }
 
+    private:
 
-        string interpret_chunkid(const int64_t& id) {
+        ////
+        //// private methods that help the public methods
+        ////
+        string interpret_chunkid(const int64_t& id)
+        {
             string s;
             switch(id) {
                 case chunkid_header:
@@ -341,7 +367,9 @@ class HPFFile {
             }
             return s;
         }
-        string interpret_creatorid(const int32_t& id) {  // this is a FourCC string: 'datx'
+
+        string interpret_creatorid(const int32_t& id)
+        {  // this is a FourCC string: 'datx'
             string s;
             const int8_t * p = reinterpret_cast<const int8_t * const>(&id);
             s += p[0]; s += p[1]; s += p[2]; s += p[3];
@@ -349,7 +377,13 @@ class HPFFile {
         }
 
 
-        bool file_status(const bool verbose = false) {
+    public:
+
+        ////
+        //// public methods for status and debugging
+        ////
+        bool file_status(const bool verbose = false)
+        {
             const string p = pfx(cnm + "::" + "file_status", 25);
             const string pv = pfx(cnm + "::" + "file_status(verbose)", 30);
             streampos beg, end, here;
@@ -374,7 +408,9 @@ class HPFFile {
             }
             return o;
         }
-        void dump() {
+
+        void dump()
+        {
             const string p = pfx(cnm + "::" + "dump", 20);
             cerr << p << "chunksz=" << chunksz 
                 << " sizeof(int64_t)=" << sizeof(int64_t) 
