@@ -50,7 +50,7 @@ class HPFFile
     public:
 
         const string cnm = "";//"HPFFile";
-        unsigned char debug = 1;  // if > 0, print lots of info
+        unsigned char debug = 2;  // if > 0, print lots of info
 
         ////
         //// buffer
@@ -171,10 +171,10 @@ class HPFFile
             string SensorOffset;
             string PerChannelSampleRate;
             string PhysicalChannelNumber;
-            string UsesSensorValues;
+            bool   UsesSensorValues;
             string ThermocoupleType;
             string TemperatureUnit;
-            string UseThermocoupleValues;
+            bool   UseThermocoupleValues;
             double interpret_raw_as_volts(const string& rawdata) {
                 double r = atof(rawdata.c_str());
                 double dats = atof(DataScale.c_str());
@@ -196,6 +196,35 @@ class HPFFile
 
         // eventdefinition
         int32_t definitioncount;
+        typedef struct EventDefinition {
+            string Name;
+            string Description;
+            string Class;
+            string ID;
+            string Type;
+            bool   UsesIData1;
+            bool   UsesIData2;
+            bool   UsesDData1;
+            bool   UsesDData2;
+            bool   UsesDData3;
+            bool   UsesDData4;
+            string DescriptionIData1;
+            string DescriptionIData2;
+            string DescriptionDData1;
+            string DescriptionDData2;
+            string DescriptionDData3;
+            string DescriptionDData4;
+            string Parameter1;
+            string Parameter2;
+            string Tolerance;
+            bool   UsesParameter1;
+            bool   UsesParameter2;
+            bool   UsesTolerance;
+            string DescriptionParameter1;
+            string DescriptionParameter2;
+            string DescriptionTolerance;
+        } EventDefinition;
+        vector<EventDefinition> eventdefinition;
 
         // eventdata
         int32_t eventcount;
@@ -356,7 +385,7 @@ class HPFFile
             auto doc = tinyxml2::load_document(xmldata);
             auto root = doc->FirstChildElement();
             if (! root) { cerr << p << "*** Root of XML not found" << endl; exit(1); }
-            if (strcmp(root->Name(), rootname)) {
+            else if (strcmp(root->Name(), rootname)) {
                 cerr << p << "*** <" << rootname << "> not found in doc, instead found " << root->Name() << endl;
                 exit(1);
             }
@@ -386,16 +415,17 @@ class HPFFile
                         else if (! strcmp(c->Name(), "SensorOffset"))             { channelinfo[i].SensorOffset.assign(text(c)); }
                         else if (! strcmp(c->Name(), "PerChannelSampleRate"))     { channelinfo[i].PerChannelSampleRate.assign(text(c)); }
                         else if (! strcmp(c->Name(), "PhysicalChannelNumber"))    { channelinfo[i].PhysicalChannelNumber.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesSensorValues"))         { channelinfo[i].UsesSensorValues.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesSensorValues"))         { channelinfo[i].UsesSensorValues = interpret_bool(text(c)); }
                         else if (! strcmp(c->Name(), "ThermocoupleType"))         { channelinfo[i].ThermocoupleType.assign(text(c)); }
                         else if (! strcmp(c->Name(), "TemperatureUnit"))          { channelinfo[i].TemperatureUnit.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UseThermocoupleValues"))    { channelinfo[i].UseThermocoupleValues.assign(text(c)); }
-                        else { cerr << "*** Unknown child of ChannelInformationData: " << c->Name() << endl; exit(1); }
+                        else if (! strcmp(c->Name(), "UseThermocoupleValues"))    { channelinfo[i].UseThermocoupleValues = interpret_bool(text(c)); }
+                        else { cerr << "*** Unknown child of ChannelInformation: " << c->Name() << endl; exit(1); }
                         });
             }
 
             if (debug) {
                 cerr << p << rootname << " name : " << root->Name() << endl;
+                cerr << std::boolalpha;
                 if (debug >= 2) {
                     for (auto i = numberofchannels - numberofchannels; i < numberofchannels; ++i) {
                         cerr << p << std::setw(3) << std::right << i << " Name " << channelinfo[i].Name << endl;
@@ -463,8 +493,134 @@ class HPFFile
             definitioncount = u.buffer32[4];
             xmldata.assign(reinterpret_cast<const char*>(&u.buffer32[5]));
             if (debug) {
-                cerr << p << "definitioncount    int32_t  : " << i2h(definitioncount) << " " << definitioncount << endl;
-                cerr << p << "xmldata            char[]   : " << xmldata << endl;
+                cerr << p << "definitioncount    int32_t  : " << definitioncount << " " << i2h(definitioncount) << endl;
+                cerr << p << "xmldata            char[]   : " << xmldata.substr(0, 200) << " ..." << endl;
+            }
+            //
+            // handle the XML
+            static const char* rootname = "EventDefinitionData";
+            auto doc = tinyxml2::load_document(xmldata);
+            auto root = doc->FirstChildElement();
+            if (! root) { cerr << p << "*** Root of XML not found" << endl; exit(1); }
+            else if (strcmp(root->Name(), rootname)) {
+                cerr << p << "*** <" << rootname << "> not found in doc, instead found " << root->Name() << endl;
+                exit(1);
+            }
+            if (eventdefinition.size()) {
+                cerr << p << "*** eventdefinition already allocated, has size " << eventdefinition.size() << endl;
+                exit(1);
+            }
+            eventdefinition.resize(definitioncount);
+            auto i = 0 * definitioncount;
+            for (auto evdef : root)
+            {
+                //auto i = atol(text(evdef->FirstChildElement("DataIndex")).c_str());
+                for_each (cbegin(evdef), cend(evdef),
+                        [this, i](auto c) {
+                        if      (! strcmp(c->Name(), "Name"))                  { eventdefinition[i].Name.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Description"))           { eventdefinition[i].Description.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Class"))                 { eventdefinition[i].Class.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "ID"))                    { eventdefinition[i].ID.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Type"))                  { eventdefinition[i].Type.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesIData1"))            { eventdefinition[i].UsesIData1 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesIData2"))            { eventdefinition[i].UsesIData2 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesDData1"))            { eventdefinition[i].UsesDData1 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesDData2"))            { eventdefinition[i].UsesDData2 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesDData3"))            { eventdefinition[i].UsesDData3 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesDData4"))            { eventdefinition[i].UsesDData4 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionIData1"))     { eventdefinition[i].DescriptionIData1.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionIData2"))     { eventdefinition[i].DescriptionIData2.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionDData1"))     { eventdefinition[i].DescriptionDData1.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionDData2"))     { eventdefinition[i].DescriptionDData2.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionDData3"))     { eventdefinition[i].DescriptionDData3.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionDData4"))     { eventdefinition[i].DescriptionDData4.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Parameter1"))            { eventdefinition[i].Parameter1.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Parameter2"))            { eventdefinition[i].Parameter2.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "Tolerance"))             { eventdefinition[i].Tolerance.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesParameter1"))        { eventdefinition[i].UsesParameter1 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesParameter2"))        { eventdefinition[i].UsesParameter2 = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "UsesTolerance"))         { eventdefinition[i].UsesTolerance = interpret_bool(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionParameter1")) { eventdefinition[i].DescriptionParameter1.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionParameter2")) { eventdefinition[i].DescriptionParameter2.assign(text(c)); }
+                        else if (! strcmp(c->Name(), "DescriptionTolerance"))  { eventdefinition[i].DescriptionTolerance.assign(text(c)); }
+                        else { cerr << "*** Unknown child of EventDefinition: " << c->Name() << endl; exit(1); }
+                        });
+                ++i;
+            }
+            if (i != definitioncount) { cerr << "*** observed eventdefs " << i << " does not match definitioncount " << definitioncount << endl; exit(1); }
+
+            if (debug) {
+                cerr << p << rootname << " name : " << root->Name() << endl;
+                if (debug >= 1) {
+                    for (auto i = 0 * definitioncount; i < definitioncount; ++i) {
+                        cerr << std::boolalpha;
+                        cerr << p << std::setw(3) << std::right << i << " Name " << eventdefinition[i].Name << endl;
+                        cerr << p << std::setw(3) << std::right << i << " Description " << eventdefinition[i].Description << endl;
+                        cerr << p << std::setw(3) << std::right << i << " Class " << eventdefinition[i].Class << endl;
+                        cerr << p << std::setw(3) << std::right << i << " ID " << eventdefinition[i].ID << endl;
+                        cerr << p << std::setw(3) << std::right << i << " Type " << eventdefinition[i].Type << endl;
+                        if (! eventdefinition[i].UsesIData1) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " IData1 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesIData1 " << eventdefinition[i].UsesIData1 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionIData1 " << eventdefinition[i].DescriptionIData1 << endl;
+                        }
+                        if (! eventdefinition[i].UsesIData2) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " IData2 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesIData2 " << eventdefinition[i].UsesIData2 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionIData2 " << eventdefinition[i].DescriptionIData2 << endl;
+                        }
+                        if (! eventdefinition[i].UsesDData1) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData1 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesDData1 " << eventdefinition[i].UsesDData1 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData1 " << eventdefinition[i].DescriptionDData1 << endl;
+                        }
+                        if (! eventdefinition[i].UsesDData2) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData2 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesDData2 " << eventdefinition[i].UsesDData2 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData2 " << eventdefinition[i].DescriptionDData2 << endl;
+                        }
+                        if (! eventdefinition[i].UsesDData3) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData3 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesDData3 " << eventdefinition[i].UsesDData3 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData3 " << eventdefinition[i].DescriptionDData3 << endl;
+                        }
+                        if (! eventdefinition[i].UsesDData4) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData4 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " UsesDData4 " << eventdefinition[i].UsesDData4 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData4 " << eventdefinition[i].DescriptionDData4 << endl;
+                        }
+                        if (! eventdefinition[i].UsesParameter1) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Parameter1 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " Parameter1 " << eventdefinition[i].Parameter1 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " UsesParameter1 " << eventdefinition[i].UsesParameter1 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionParameter1 " << eventdefinition[i].DescriptionParameter1 << endl;
+                        }
+                        if (! eventdefinition[i].UsesParameter2) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Parameter2 not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " Parameter2 " << eventdefinition[i].Parameter2 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " UsesParameter2 " << eventdefinition[i].UsesParameter2 << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionParameter2 " << eventdefinition[i].DescriptionParameter2 << endl;
+                        }
+                        if (! eventdefinition[i].UsesTolerance) {
+                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Tolerance not used " << endl;
+                        } else {
+                            cerr << p << std::setw(3) << std::right << i << " Tolerance " << eventdefinition[i].Tolerance << endl;
+                            cerr << p << std::setw(3) << std::right << i << " UsesTolerance " << eventdefinition[i].UsesTolerance << endl;
+                            cerr << p << std::setw(3) << std::right << i << " DescriptionTolerance " << eventdefinition[i].DescriptionTolerance << endl;
+                        }
+                    }
+                }
+                // print channel names
+                cerr << p << "XML is unpacked. EventDef Class:ID:Type :" << endl;
+                cerr << p; for (auto c : eventdefinition) cerr << c.Class << ":" << c.ID << ":" << c.Type << ", "; cerr << endl;
             }
         }
 
@@ -546,6 +702,13 @@ class HPFFile
             return s;
         }
 
+        bool interpret_bool(const string& s)
+        {  // turn True and False into the corresponding bool value
+            if (s == "True")        return true;
+            else if (s == "False")  return false;
+            else { cerr << "interpret_bool: unknown argument " << s << endl; exit(1); }
+        }
+
 
 
     public:
@@ -598,19 +761,6 @@ int main ()
     HPFFile h("t.hpf");
     if (! h.file_status())
         exit(1);
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
     h.read_chunk();
     h.read_chunk();
     h.read_chunk();
