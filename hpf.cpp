@@ -10,11 +10,16 @@
 #include <fstream>
 #include <cstring>
 #include <cstdint>
+#include <cctype>
+#include <limits>
+#include <algorithm>
 #include <vector>
 #include "tinyxml2.h"  //  for reading/parsing xml
 #include "tixml2ex.h"  //  this also includes tinyxml2.h, but it's already loaded
 using namespace std;
 using namespace tinyxml2;
+
+typedef std::numeric_limits<double> dbl;
 
 // handy int-to-hex printer padded to var nibble width, from https://stackoverflow.com/questions/5100718/integer-to-hex-string-in-c
 template< typename T >
@@ -34,6 +39,14 @@ std::string i2h( T i )
   return stream.str();
 }
 
+string ToLower(const string& s)
+{
+    string t = s;
+    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+    return t;
+}
+
+
 
 // TODO   cannot currently handle more than one groupID, and...
 // TODO   cannot currently detect if there is more than one groupID in use, and...
@@ -50,12 +63,17 @@ class HPFFile
     public:
 
         const string cnm = "";//"HPFFile";
-        unsigned char debug = 2;  // if > 0, print lots of info
+        unsigned char debug = 0;  // if > 0, print lots of info to cerr
+        bool table = true;  // if true, print data table to cout
+        streampos filebeg;  // beginning of the file opened, set by the constructor
+        streampos fileend;  // end of the file opened, set by the constructor
+        streampos filesize;  // size of the file opened, set by the constructor
+        int64_t   table_data_lines = 0;  // number of data lines in the table
 
         ////
         //// buffer
         ////
-        static const size_t chunksz = 64 * 1024; // 64KB chunks are the default with HPF files
+        static const size_t defaultchunksz = 64 * 1024; // 64KB chunks are the default with HPF files
         static const size_t buffersz = 1024 * 1024; // 1024KB is the largest chunk size we allow for now
 
         static const size_t int64_count = buffersz / sizeof(int64_t);  // number of 64-bit atoms
@@ -65,10 +83,12 @@ class HPFFile
 
     private:
 
-        ifstream file;
-        const string filename;
-        size_t pos;
-        size_t cursz;
+        ifstream      file;
+        const string  filename;
+        size_t        pos;
+        streampos     curchunkfilepos;
+        size_t        curchunksz;
+
         union {  // union to allow access to the buffer containing buffersz bytes at whichever atom size we wish
             int64_t buffer64 [int64_count];
             int32_t buffer32 [int32_count];
@@ -83,7 +103,6 @@ class HPFFile
             s << std::left << (p + ":");
             return s.str();
         }
-
 
     public:
 
@@ -100,35 +119,40 @@ class HPFFile
         };
 
         // common
-        char*   chunkbaseaddress;
-        int64_t chunkid; string chunkid_s;
-        int64_t chunksize;
-        int32_t groupid; // used by channelinfo and data
-        string  xmldata; // used by header, channelinfo, eventdefinition, ...
+        streampos  chunkfilepos;
+        int64_t    chunkid;
+        string     chunkid_s;
+        int64_t    chunksize;
+        int32_t    groupid; // 'set' by definition in channelinfo, ref'd by data
+        string     xmldata; // used by header, channelinfo, eventdefinition, ...
         typedef struct Time {
             string s_time;
             long y, m, d, h, n, s, x;
             double frac_s;  // fractional seconds
             Time(const string& t = "")
-                : s_time(t)
+                // : s_time(t)
             {
-                interpret(s_time);
+                //interpret(s_time);
+                interpret(t);
             };
-            string out() {
+            string out() const {
                 stringstream ss;
+                ss.fill('0');
                 ss << setw(4) << y
-                    << "." << setw(2) << m
-                    << "." << setw(2) << d
-                    << " " << setw(2) << h
+                    << "-" << setw(2) << m
+                    << "-" << setw(2) << d
+                    << "|" << setw(2) << h
                     << "." << setw(2) << n
                     << "." << setw(2) << s
-                    << "." << x
-                    << "  " << frac_s
-                    << "  " << s_time;
+                    << "." << x;
+                    //<< "." << x
+                    //<< "  " << frac_s
+                    //<< "  " << s_time;
                 return ss.str();
             };
             void interpret(const string& t)
             {
+                //cerr << "Time::interpret(" << t << ")" << endl;
                 s_time = t;
                 if (t.length() == 0 || atol(t.c_str()) == 0) {
                     y = m = d = h = n = s = x = 0;
@@ -143,86 +167,158 @@ class HPFFile
                     x = atol(t.substr(20).c_str());
                     frac_s = atof(t.substr(17).c_str());
                 }
+                //cerr << "Time::out()" << out();
             }
+            friend ostream& operator<<(std::ostream& os, const Time& t);
         } Time;
+
+        typedef struct DataType {
+            string  s_datatype;
+            string  str;
+            int32_t size_bytes;
+            bool    is_signed;
+            bool    is_fp;
+            DataType(const string& t = "")
+                : s_datatype(t), str(t), size_bytes(0), is_signed(false), is_fp(false)
+                //
+            {
+                //interpret(s_time);
+                interpret(t);
+            };
+            string out() const {
+                stringstream ss;
+                ss << str;
+                //ss << s_datatype << std::boolalpha
+                //    << ":" << size_bytes
+                //    << ":" << is_signed;
+                return ss.str();
+            };
+            void interpret(const string& t)
+            {
+                // cerr << "DataType::interpret(" << t << ")" << endl;
+                s_datatype = t;
+                str = ToLower(s_datatype);
+                if (str == "int16") {
+                    size_bytes = 2;
+                    is_signed = true;
+                } else if (str == "uint16") {
+                    size_bytes = 2;
+                    is_signed = false;
+                } else if (str == "int32") {
+                    size_bytes = 4;
+                    is_signed = true;
+                } else if (str == "float") {
+                    size_bytes = 4;
+                    is_signed = is_fp = true;
+                } else if (str == "double") {
+                    size_bytes = 8;
+                    is_signed = is_fp = true;
+                } else { cerr << "DataType::interpret(): datatype unknown: " << t << endl; exit(1); }
+                if (str != "int16") cerr << "DataType not implemented: " << out();
+                // cerr << "DataType::out()" << out();
+            }
+            friend ostream& operator<<(std::ostream& os, const DataType& t);
+        } DataType;
 
         // header
         int32_t creatorid; string creatorid_s;
         int64_t fileversion;
         int64_t indexchunkoffset;
         string  recdate; // RecordingDate from XML
-        
+        Time    rectime; // RecordingDate from XML, interpreted as Time
+
         // channelinfo
         int32_t numberofchannels;
         typedef struct ChannelInfo {
-            string Name;
-            string Unit;
-            string ChannelType;
-            string AssignedTimeChannelIndex;
-            string DataType;
-            string DataIndex;
-            string StartTime;
-            string TimeIncrement;
-            string RangeMin;
-            string RangeMax;
-            string DataScale;
-            string DataOffset;
-            string SensorScale;
-            string SensorOffset;
-            string PerChannelSampleRate;
-            string PhysicalChannelNumber;
-            bool   UsesSensorValues;
-            string ThermocoupleType;
-            string TemperatureUnit;
-            bool   UseThermocoupleValues;
-            double interpret_raw_as_volts(const string& rawdata) {
-                double r = atof(rawdata.c_str());
-                double dats = atof(DataScale.c_str());
-                double dato = atof(DataOffset.c_str());
-                return (r * dats + dato);
+            int32_t  _index;
+            string   Name;
+            string   Unit;
+            string   ChannelType;
+            int32_t  AssignedTimeChannelIndex;
+            string   DataType;
+            int32_t  DataIndex;
+            Time     StartTime;
+            double   TimeIncrement;
+            int16_t  RangeMin;
+            int16_t  RangeMax;
+            double   DataScale;
+            double   DataOffset;
+            double   SensorScale;
+            double   SensorOffset;
+            double   PerChannelSampleRate;
+            int32_t  PhysicalChannelNumber;
+            bool     UsesSensorValues;
+            string   ThermocoupleType;
+            string   TemperatureUnit;
+            bool     UseThermocoupleValues;
+            //
+            double interpret_as_volts(int16_t p) const {
+                return static_cast<double>(p) * DataScale + DataOffset;
             }
         } ChannelInfo;
         vector<ChannelInfo> channelinfo;
 
-        // data
-        int64_t datastartindex;
-        int32_t channeldatacount;
+        // data block
         typedef struct ChannelDescriptor {
+            int32_t _index;      // not defined as part of the ChannelDescriptor structure
             int32_t offset;
             int32_t length;
+            string  _datatype;   // type of each piece of data
+            int32_t _atom_size;  // size of each piece of data
+            int32_t _num_atoms;  // number of pieces of data
         } ChannelDescriptor;
-        ChannelDescriptor* channeldescriptor;
-        int32_t* data;
+        // index block filled in as we see each data chunk
+        typedef struct DataChunkIndex {
+            streampos fileoffset_chunk;
+            streampos fileoffset_data;
+            int64_t startindex;
+            int64_t endindex;
+            int32_t groupID;
+        } DataChunkIndex;
+        // each data chunk has its own ChannelDescriptor block, so allocate in interpret_data_chunk()
+        // int64_t datastartindex;
+        // int32_t channeldatacount;
+        // ChannelDescriptor* channeldescriptor;
+        // int32_t* data;
+        
+        // The actual data
+        typedef struct ChannelData {
+            int32_t         _index;
+            vector<int16_t> data;
+        } ChannelData;
+        vector<ChannelData> channeldata;
+        
 
-        // eventdefinition
+        // eventdefinition block
         int32_t definitioncount;
         typedef struct EventDefinition {
-            string Name;
-            string Description;
-            string Class;
-            string ID;
-            string Type;
-            bool   UsesIData1;
-            bool   UsesIData2;
-            bool   UsesDData1;
-            bool   UsesDData2;
-            bool   UsesDData3;
-            bool   UsesDData4;
-            string DescriptionIData1;
-            string DescriptionIData2;
-            string DescriptionDData1;
-            string DescriptionDData2;
-            string DescriptionDData3;
-            string DescriptionDData4;
-            string Parameter1;
-            string Parameter2;
-            string Tolerance;
-            bool   UsesParameter1;
-            bool   UsesParameter2;
-            bool   UsesTolerance;
-            string DescriptionParameter1;
-            string DescriptionParameter2;
-            string DescriptionTolerance;
+            int32_t  eventdef_index;
+            string   Name;
+            string   Description;
+            int32_t  Class;
+            int32_t  ID;
+            string   Type;
+            bool     UsesIData1;
+            bool     UsesIData2;
+            bool     UsesDData1;
+            bool     UsesDData2;
+            bool     UsesDData3;
+            bool     UsesDData4;
+            string   DescriptionIData1;
+            string   DescriptionIData2;
+            string   DescriptionDData1;
+            string   DescriptionDData2;
+            string   DescriptionDData3;
+            string   DescriptionDData4;
+            string   Parameter1;
+            string   Parameter2;
+            string   Tolerance;
+            bool     UsesParameter1;
+            bool     UsesParameter2;
+            bool     UsesTolerance;
+            string   DescriptionParameter1;
+            string   DescriptionParameter2;
+            string   DescriptionTolerance;
         } EventDefinition;
         vector<EventDefinition> eventdefinition;
 
@@ -244,13 +340,33 @@ class HPFFile
         Event* event;
 
         // index
-        int64_t indexcount;
+        // int64_t indexcount;  now allocated in interpret_chunk_index()
+        int64_t index_entries = 0;
         typedef struct Index {
+            int64_t _index;
+            HPFFile* parent;
             int64_t datastartindex;
             int64_t perchanneldatalengthinsamples;
             int64_t chunkid;
             int64_t groupid;
             int64_t fileoffset;
+            Index(HPFFile* p, int64_t dsi, int64_t pcdlis, int64_t cid, int64_t gid, int64_t fo)
+                : parent(p), datastartindex(dsi), perchanneldatalengthinsamples(pcdlis),
+                  chunkid(cid), groupid(gid), fileoffset(fo)
+            {
+                _index = parent->index_entries++;
+            }
+            string out() const
+            {
+                stringstream ss;
+                ss << std::setw(6) << std::right << _index
+                    << " datastartindex=" << i2h(datastartindex)
+                    << " perchanneldatalengthinsamples=" << i2h(perchanneldatalengthinsamples)
+                    << " chunkid=" << i2h(chunkid)
+                    << " groupid=" << i2h(groupid)
+                    << " fileoffset=" << i2h(fileoffset);
+                return ss.str();
+            }
         } Index;
         vector<Index> index;
 
@@ -261,6 +377,14 @@ class HPFFile
             : filename(fn), pos(0)
         {
             file.open(filename, ios::in | ios::binary);
+            streampos here;
+            here = file.tellg();
+            file.seekg(0, ios::beg);
+            filebeg = file.tellg();
+            file.seekg(0, ios::end);
+            fileend = file.tellg();
+            filesize = fileend - filebeg;
+            file.seekg(here);
             if (debug)
                 dump();
         }
@@ -272,9 +396,11 @@ class HPFFile
         ////
         //// public methods for reading and interpreting chunk contents
         ////
-        void read_chunk(size_t sz = chunksz)
+        bool read_chunk()
         {
             static const string p = pfx(cnm + "::" + "read_chunk", 25);
+            if (file_status() == false)
+                return false;
             // read the first two int64 words
             // using word[1], determine buffer size
             // reposition to prior to the first two words, and read word[1] bytes into the buffer
@@ -282,26 +408,32 @@ class HPFFile
             int64_t twowords[2];
             streampos here = file.tellg();
             file.read(reinterpret_cast<char*>(&twowords[0]), 16);  // read the first two words
-            if (debug) {
-                cerr << p << "here=" << here 
-                    << " first two 64-bit words: twowords[0]=chunkid=" << i2hp(twowords[0]) 
-                    << " twowords[1]=chunksize=" << i2hp(twowords[1]) 
+            if (! file) {
+                if (debug)
+                    cerr << p << "could only read " << file.gcount() << " bytes, closing file" << endl;
+                file.close();
+                return false;
+            }
+            if (debug >= 2) {
+                cerr << p << "here=" << here << " " << i2h(here)
+                    << " first two 64-bit words: twowords[0]=chunkid=" << i2hp(twowords[0])
+                    << " twowords[1]=chunksize=" << i2hp(twowords[1])
                     << endl;
                 cerr << p << "repositioning to " << here << " and reading " << i2h(twowords[1]) << " " << twowords[1] << " bytes" << endl;
             }
             file.seekg(here);
-            sz = twowords[1];
-            if (sz > buffersz) {
-                cerr << p << "buffer size " << i2h(buffersz) << " is too small for chunk size " << i2h(sz) << endl;
+            curchunksz = twowords[1];
+            if (curchunksz > buffersz) {
+                cerr << p << "buffer size " << i2h(buffersz) << " is too small for chunk size " << i2h(curchunksz) << endl;
                 exit(1);
             }
-            chunkbaseaddress = reinterpret_cast<char*>(&u.buffer64[0]);
-            file.read(chunkbaseaddress, sz);
+            curchunkfilepos = here;
+            file.read(reinterpret_cast<char*>(&u.buffer64[0]), curchunksz);  // read into the buffer
             pos = file.tellg();
-            cursz = sz;
             if (debug)
                 file_status();
             interpret_chunk();
+            return true;
         }
 
         void interpret_chunk()
@@ -309,11 +441,15 @@ class HPFFile
             static const string p = pfx(cnm + "::" + "interpret_chunk");
             chunkid = u.buffer64[0];
             chunkid_s = interpret_chunkid(chunkid);
-            chunksize = u.buffer64[1];
+            if (u.buffer64[1] != curchunksz) { cerr << p << "error interpreting curchunksz" << endl; exit(1); }
             if (debug) {
-                cerr << p << "chunkbaseaddress   char*    : " << i2hp(chunkbaseaddress) << endl;
-                cerr << p << "chunkid            int64_t  : " << chunkid << " " << i2hp(chunkid) << " " << chunkid_s << endl;
-                cerr << p << "chunksize          int64_t  : " << chunksize << " " << i2hp(chunksize) << endl;
+                cerr << p << "curchunkfilepos    streampos: " << curchunkfilepos << " " << i2h(curchunkfilepos)
+                    << " chunkid : " << chunkid << " " << i2h(chunkid) << " " << chunkid_s 
+                    << " curchunksz : " << curchunksz << " " << i2h(curchunksz)
+                    << endl;
+                //cerr << p << "curchunkfilepos    streampos: " << curchunkfilepos << " " << i2h(curchunkfilepos) << endl;
+                //cerr << p << "chunkid            int64_t  : " << chunkid << " " << i2h(chunkid) << " " << chunkid_s << endl;
+                //cerr << p << "curchunksz         int64_t  : " << curchunksz << " " << i2h(curchunksz) << endl;
             }
             switch(chunkid) {
                 case chunkid_header:
@@ -360,11 +496,11 @@ class HPFFile
                 exit(1);
             }
             recdate.assign(text(root));
-            Time rectime(recdate);
+            rectime.interpret(recdate);
             //rectime.interpret(recdate);
             if (debug) {
                 cerr << p << "XML is unpacked. Name:recdate:rectime :" << endl;
-                cerr << p << root->Name() << ":" << recdate << ":" << rectime.out() << endl;
+                cerr << p << root->Name() << ":" << recdate << ":" << rectime << endl;
             }
         }
 
@@ -394,97 +530,152 @@ class HPFFile
                 exit(1);
             }
             channelinfo.resize(numberofchannels);
+            channeldata.resize(numberofchannels);
+            auto i = 0 * numberofchannels;
             for (auto chinfo : root)
             {
-                auto i = atol(text(chinfo->FirstChildElement("DataIndex")).c_str());
                 for_each (cbegin(chinfo), cend(chinfo),
-                        [this, i](auto c) {
-                        if      (! strcmp(c->Name(), "Name"))                     { channelinfo[i].Name.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Unit"))                     { channelinfo[i].Unit.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "ChannelType"))              { channelinfo[i].ChannelType.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "AssignedTimeChannelIndex")) { channelinfo[i].AssignedTimeChannelIndex.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DataType"))                 { channelinfo[i].DataType.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DataIndex"))                { channelinfo[i].DataIndex.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "StartTime"))                { channelinfo[i].StartTime.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "TimeIncrement"))            { channelinfo[i].TimeIncrement.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "RangeMin"))                 { channelinfo[i].RangeMin.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "RangeMax"))                 { channelinfo[i].RangeMax.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DataScale"))                { channelinfo[i].DataScale.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DataOffset"))               { channelinfo[i].DataOffset.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "SensorScale"))              { channelinfo[i].SensorScale.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "SensorOffset"))             { channelinfo[i].SensorOffset.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "PerChannelSampleRate"))     { channelinfo[i].PerChannelSampleRate.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "PhysicalChannelNumber"))    { channelinfo[i].PhysicalChannelNumber.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesSensorValues"))         { channelinfo[i].UsesSensorValues = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "ThermocoupleType"))         { channelinfo[i].ThermocoupleType.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "TemperatureUnit"))          { channelinfo[i].TemperatureUnit.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UseThermocoupleValues"))    { channelinfo[i].UseThermocoupleValues = interpret_bool(text(c)); }
-                        else { cerr << "*** Unknown child of ChannelInformation: " << c->Name() << endl; exit(1); }
+                        [this, i](auto x) {
+                        channelinfo[i]._index = i;
+                        channeldata[i]._index = i;
+                        if (debug >= 3) {
+                            cerr << p << "x->Name() = " << x->Name() 
+                                 << "  text(x) = " << text(x)
+                                 << endl;
+                        }
+#define MATCH_SET_STRING_VAR(_a_,_b_,_v_)          (! strcmp(_a_->Name(), #_v_)) { _b_._v_.assign(text(_a_)); }
+#define MATCH_SET_CONVERT_VAR(_a_,_b_,_v_,_cfunc_) (! strcmp(_a_->Name(), #_v_)) { _b_._v_ = _cfunc_(text(_a_));  }
+#define MATCH_SET_ASSIGN_VAR(_a_,_b_,_v_,_method_) (! strcmp(_a_->Name(), #_v_)) { _b_._v_._method_(text(_a_));  }
+                        if      MATCH_SET_STRING_VAR  ( x, channelinfo[i], Name)
+                        else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], Unit)
+                        else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], ChannelType)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], AssignedTimeChannelIndex, interpret_int32)
+                        //else if MATCH_SET_ASSIGN_VAR  ( x, channelinfo[i], DataType, interpret)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataType, interpret_datatype)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataIndex, interpret_int32)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], StartTime, interpret_time)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], TimeIncrement, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMin, interpret_int16)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMax, interpret_int16)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataScale, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataOffset, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorScale, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorOffset, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PerChannelSampleRate, interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PhysicalChannelNumber, interpret_int32)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UsesSensorValues, interpret_bool)
+                        else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], ThermocoupleType)
+                        else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], TemperatureUnit)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UseThermocoupleValues, interpret_bool)
+                        else { cerr << "*** Unknown child of ChannelInformation: " << x->Name() << endl; exit(1); }
                         });
+                ++i;
             }
 
             if (debug) {
                 cerr << p << rootname << " name : " << root->Name() << endl;
                 cerr << std::boolalpha;
                 if (debug >= 2) {
-                    for (auto i = numberofchannels - numberofchannels; i < numberofchannels; ++i) {
-                        cerr << p << std::setw(3) << std::right << i << " Name " << channelinfo[i].Name << endl;
-                        cerr << p << std::setw(3) << std::right << i << " Unit " << channelinfo[i].Unit << endl;
-                        cerr << p << std::setw(3) << std::right << i << " ChannelType " << channelinfo[i].ChannelType << endl;
-                        cerr << p << std::setw(3) << std::right << i << " AssignedTimeChannelIndex " << channelinfo[i].AssignedTimeChannelIndex << endl;
-                        cerr << p << std::setw(3) << std::right << i << " DataType " << channelinfo[i].DataType << endl;
-                        cerr << p << std::setw(3) << std::right << i << " DataIndex " << channelinfo[i].DataIndex << endl;
-                        cerr << p << std::setw(3) << std::right << i << " StartTime " << channelinfo[i].StartTime << endl;
-                        cerr << p << std::setw(3) << std::right << i << " TimeIncrement " << channelinfo[i].TimeIncrement << endl;
-                        cerr << p << std::setw(3) << std::right << i << " RangeMin " << channelinfo[i].RangeMin << endl;
-                        cerr << p << std::setw(3) << std::right << i << " RangeMax " << channelinfo[i].RangeMax << endl;
-                        cerr << p << std::setw(3) << std::right << i << " DataScale " << channelinfo[i].DataScale << endl;
-                        cerr << p << std::setw(3) << std::right << i << " DataOffset " << channelinfo[i].DataOffset << endl;
-                        cerr << p << std::setw(3) << std::right << i << " SensorScale " << channelinfo[i].SensorScale << endl;
-                        cerr << p << std::setw(3) << std::right << i << " SensorOffset " << channelinfo[i].SensorOffset << endl;
-                        cerr << p << std::setw(3) << std::right << i << " PerChannelSampleRate " << channelinfo[i].PerChannelSampleRate << endl;
-                        cerr << p << std::setw(3) << std::right << i << " PhysicalChannelNumber " << channelinfo[i].PhysicalChannelNumber << endl;
-                        cerr << p << std::setw(3) << std::right << i << " UsesSensorValues " << channelinfo[i].UsesSensorValues << endl;
-                        cerr << p << std::setw(3) << std::right << i << " ThermocoupleType " << channelinfo[i].ThermocoupleType << endl;
-                        cerr << p << std::setw(3) << std::right << i << " TemperatureUnit " << channelinfo[i].TemperatureUnit << endl;
-                        cerr << p << std::setw(3) << std::right << i << " UseThermocoupleValues " << channelinfo[i].UseThermocoupleValues << endl;
+                    for (auto c : channelinfo) {
+#define PRINT_VAR(_c_,_v_) " " #_v_ "=" << _c_._v_
+                        cerr << p << std::setw(3) << std::right << c._index
+                            << PRINT_VAR(c, Name)
+                            << PRINT_VAR(c, Unit)
+                            << PRINT_VAR(c, ChannelType)
+                            << PRINT_VAR(c, AssignedTimeChannelIndex)
+                            << PRINT_VAR(c, DataType)
+                            << PRINT_VAR(c, DataIndex)
+                            << PRINT_VAR(c, StartTime)
+                            << PRINT_VAR(c, TimeIncrement)
+                            << PRINT_VAR(c, RangeMin)
+                            << PRINT_VAR(c, RangeMax)
+                            << PRINT_VAR(c, DataScale)
+                            << PRINT_VAR(c, DataOffset)
+                            << PRINT_VAR(c, SensorScale)
+                            << PRINT_VAR(c, SensorOffset)
+                            << PRINT_VAR(c, PerChannelSampleRate)
+                            << PRINT_VAR(c, PhysicalChannelNumber)
+                            << PRINT_VAR(c, UsesSensorValues)
+                            << PRINT_VAR(c, ThermocoupleType)
+                            << PRINT_VAR(c, TemperatureUnit)
+                            << PRINT_VAR(c, UseThermocoupleValues)
+                            << endl;
                     }
                 }
                 // print channel names
                 cerr << p << "XML is unpacked. Channel Name:DataType :" << endl;
-                cerr << p; for (auto c : channelinfo) cerr << c.Name << ":" << c.DataType << ", "; cerr << endl;
+                cerr << p;
+                for (auto c : channelinfo)
+                    cerr << c.Name << ":" << c.DataType << ", ";
+                cerr << endl;
             }
         }
 
         void interpret_chunk_data()
         {
             static const string p = pfx(cnm + "::" + "interpret_chunk_data");
-            groupid = u.buffer32[4];
-            datastartindex = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
-            channeldatacount = u.buffer32[7];
-            channeldescriptor = new ChannelDescriptor[channeldatacount];
+            //groupid = u.buffer32[4];
+            if (u.buffer32[4] != groupid) {
+                cerr << p << "*** groupid as recorded in data chunk " << u.buffer32[4] << " does not match groupid as recorded in channelinfo " << groupid << endl;
+                exit(1);
+            }
+            int64_t datastartindex = *(reinterpret_cast<int64_t*>(&u.buffer32[5]));
+            int32_t channeldatacount = u.buffer32[7];
+            vector<ChannelDescriptor> channeldescriptor(channeldatacount);
             for (auto i = 0; i < channeldatacount; ++i) {
+                channeldescriptor[i]._index = i;
                 channeldescriptor[i].offset = u.buffer32[8 + (2*i)];
                 channeldescriptor[i].length = u.buffer32[9 + (2*i)];
+                DataType datatype(channelinfo[i].DataType);
+                channeldescriptor[i]._datatype = datatype.str;
+                channeldescriptor[i]._atom_size = datatype.size_bytes;
+                channeldescriptor[i]._num_atoms = channeldescriptor[i].length / datatype.size_bytes;
             }
-            int32_t* data = &u.buffer32[8 + (2*channeldatacount)];
-            if (debug) {
+            if (debug >= 2) {
                 cerr << p << "groupid            int32_t  : " << i2h(groupid) << " " << groupid << endl;
                 cerr << p << "datastartindex     int64_t  : " << i2h(datastartindex) << " " << datastartindex << endl;
                 cerr << p << "channeldatacount   int32_t  : " << i2h(channeldatacount) << " " << channeldatacount << endl;
-                cerr << p << "ChannelDescriptor* channeldescriptor[]  : " << endl;
-                for (auto i = 0; i < channeldatacount; ++i) {
-                    cerr << p << std::setw(3) << std::right << i 
-                        << " offset=" << i2hp(channeldescriptor[i].offset) 
-                        << " length=" << i2hp(channeldescriptor[i].length) 
-                        << endl;
-                }
-                uint64_t offsetfromchunkbase = reinterpret_cast<char*>(data) - chunkbaseaddress;
-                cerr << p << "int32_t*           data[]   : " << i2hp(data) 
-                    << " offsetfromchunkbase=" << i2h(offsetfromchunkbase) << " " << offsetfromchunkbase 
-                    << endl;
+                cerr << p << "vector<ChannelDescriptor> channeldescriptor[]  : " << endl;
             }
-            delete[] channeldescriptor;
+            for (auto c : channeldescriptor) {
+                int16_t *dptr = &u.buffer16[c.offset / 2];
+                channeldata[c._index].data.resize(c._num_atoms);
+                for (auto j = 0; j < c._num_atoms; ++j) {
+                    channeldata[c._index].data[j] =*dptr++;
+                    // channeldata[c._index].data.push_back(*dptr++);
+                }
+                if (debug >= 3)
+                    cerr << p << "channel" << std::setw(3) << std::right << c._index << " data @"
+                        << " offset=" << i2hp(c.offset)
+                        << " length=" << i2hp(c.length)
+                        << " _datatype=" << c._datatype
+                        << " _atom_size=" << c._atom_size
+                        << " _num_atoms=" << c._num_atoms
+                        << endl;
+            }
+            if (debug >= 3) {
+                for (auto i = 0; i < channeldatacount; ++i) {
+                    cerr << "channeldata[ " << std::setw(2) << std::right << i << "]"
+                        << " " << channeldescriptor[i]._datatype
+                        // << " _datatype=" << channeldescriptor[i]._datatype
+                        // << " _atom_size=" << channeldescriptor[i]._atom_size
+                        << ".data[" << datastartindex << "- +" << channeldescriptor[i]._num_atoms << "]"
+                        // << " _num_atoms=" << channeldescriptor[i]._num_atoms
+                        << "  ";
+                    for (auto j = 0; j < channeldescriptor[i]._num_atoms; ++j) {
+                        cerr << channeldata[i].data[j] << " ";
+                        if (j >= 10) { cerr << "..."; break; }
+                    }
+                    cerr << endl;
+                }
+            }
+            // Output the lines of data we read
+            //cout << table_from_data(channeldescriptor);
+            cout << table_from_data_csv(channeldescriptor);
+            // Clear channeldata[].data
+            for (auto c : channeldata) {
+                c.data.clear();
+            }
         }
 
         void interpret_chunk_eventdefinition()
@@ -516,34 +707,35 @@ class HPFFile
             {
                 //auto i = atol(text(evdef->FirstChildElement("DataIndex")).c_str());
                 for_each (cbegin(evdef), cend(evdef),
-                        [this, i](auto c) {
-                        if      (! strcmp(c->Name(), "Name"))                  { eventdefinition[i].Name.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Description"))           { eventdefinition[i].Description.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Class"))                 { eventdefinition[i].Class.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "ID"))                    { eventdefinition[i].ID.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Type"))                  { eventdefinition[i].Type.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesIData1"))            { eventdefinition[i].UsesIData1 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesIData2"))            { eventdefinition[i].UsesIData2 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesDData1"))            { eventdefinition[i].UsesDData1 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesDData2"))            { eventdefinition[i].UsesDData2 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesDData3"))            { eventdefinition[i].UsesDData3 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesDData4"))            { eventdefinition[i].UsesDData4 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionIData1"))     { eventdefinition[i].DescriptionIData1.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionIData2"))     { eventdefinition[i].DescriptionIData2.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionDData1"))     { eventdefinition[i].DescriptionDData1.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionDData2"))     { eventdefinition[i].DescriptionDData2.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionDData3"))     { eventdefinition[i].DescriptionDData3.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionDData4"))     { eventdefinition[i].DescriptionDData4.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Parameter1"))            { eventdefinition[i].Parameter1.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Parameter2"))            { eventdefinition[i].Parameter2.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "Tolerance"))             { eventdefinition[i].Tolerance.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesParameter1"))        { eventdefinition[i].UsesParameter1 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesParameter2"))        { eventdefinition[i].UsesParameter2 = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "UsesTolerance"))         { eventdefinition[i].UsesTolerance = interpret_bool(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionParameter1")) { eventdefinition[i].DescriptionParameter1.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionParameter2")) { eventdefinition[i].DescriptionParameter2.assign(text(c)); }
-                        else if (! strcmp(c->Name(), "DescriptionTolerance"))  { eventdefinition[i].DescriptionTolerance.assign(text(c)); }
-                        else { cerr << "*** Unknown child of EventDefinition: " << c->Name() << endl; exit(1); }
+                        [this, i](auto x) {
+                        eventdefinition[i].eventdef_index = i;
+                        if      MATCH_SET_STRING_VAR ( x, eventdefinition[i], Name)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Description)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Class, interpret_event_class)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], ID, interpret_event_id)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Type, interpret_event_type)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData1, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData2, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData1, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData2, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData3, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData4, interpret_bool)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionIData1)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionIData2)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionDData1)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionDData2)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionDData3)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionDData4)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Parameter1)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Parameter2)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Tolerance)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesParameter1, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesParameter2, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesTolerance, interpret_bool)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionParameter1)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionParameter2)
+                        else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionTolerance)
+                        else { cerr << "*** Unknown child of EventDefinition: " << x->Name() << endl; exit(1); }
                         });
                 ++i;
             }
@@ -551,76 +743,57 @@ class HPFFile
 
             if (debug) {
                 cerr << p << rootname << " name : " << root->Name() << endl;
-                if (debug >= 1) {
-                    for (auto i = 0 * definitioncount; i < definitioncount; ++i) {
-                        cerr << std::boolalpha;
-                        cerr << p << std::setw(3) << std::right << i << " Name " << eventdefinition[i].Name << endl;
-                        cerr << p << std::setw(3) << std::right << i << " Description " << eventdefinition[i].Description << endl;
-                        cerr << p << std::setw(3) << std::right << i << " Class " << eventdefinition[i].Class << endl;
-                        cerr << p << std::setw(3) << std::right << i << " ID " << eventdefinition[i].ID << endl;
-                        cerr << p << std::setw(3) << std::right << i << " Type " << eventdefinition[i].Type << endl;
-                        if (! eventdefinition[i].UsesIData1) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " IData1 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesIData1 " << eventdefinition[i].UsesIData1 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionIData1 " << eventdefinition[i].DescriptionIData1 << endl;
+                cerr << std::boolalpha;
+                if (debug >= 3) {
+                    for (auto c : eventdefinition) {
+                        cerr << p << std::setw(3) << std::right << c.eventdef_index
+                            << PRINT_VAR(c, Name)
+                            << PRINT_VAR(c, Description)
+                            << PRINT_VAR(c, Class)
+                            << PRINT_VAR(c, ID)
+                            << PRINT_VAR(c, Type);
+                            // << endl;
+#define PRINT_EVENTDEF_VAR2(_c_,_v_) \
+                        if (! _c_.Uses ## _v_) { \
+                            /* if (debug >= 3) cerr << p << std::setw(3) << std::right << _c_.eventdef_index << " " #_v_ " notused" << endl;*/ \
+                            if (debug >= 3) cerr << " " #_v_ " notused" << endl; \
+                        } else { \
+                            /* cerr << p << std::setw(3) << std::right << _c_.eventdef_index */ \
+                            cerr << PRINT_VAR(_c_,Uses##_v_) \
+                                << PRINT_VAR(_c_,Description##_v_); \
+                                /* << PRINT_VAR(_c_,Description##_v_) */ \
+                                /* << endl; */ \
                         }
-                        if (! eventdefinition[i].UsesIData2) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " IData2 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesIData2 " << eventdefinition[i].UsesIData2 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionIData2 " << eventdefinition[i].DescriptionIData2 << endl;
+#define PRINT_EVENTDEF_VAR3(_c_,_v_) \
+                        if (! _c_.Uses ## _v_) { \
+                            /* if (debug >= 3) cerr << p << std::setw(3) << std::right << _c_.eventdef_index << " " #_v_ " notused" << endl; */ \
+                            if (debug >= 3) cerr << " " #_v_ " notused" << endl; \
+                        } else { \
+                            /* cerr << p << std::setw(3) << std::right << _c_.eventdef_index */  \
+                            cerr << PRINT_VAR(_c_,_v_) \
+                                << PRINT_VAR(_c_,Uses##_v_) \
+                                << PRINT_VAR(_c_,Description##_v_); \
+                                /* << PRINT_VAR(_c_,Description##_v_) */ \
+                                /* << endl; */ \
                         }
-                        if (! eventdefinition[i].UsesDData1) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData1 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesDData1 " << eventdefinition[i].UsesDData1 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData1 " << eventdefinition[i].DescriptionDData1 << endl;
-                        }
-                        if (! eventdefinition[i].UsesDData2) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData2 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesDData2 " << eventdefinition[i].UsesDData2 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData2 " << eventdefinition[i].DescriptionDData2 << endl;
-                        }
-                        if (! eventdefinition[i].UsesDData3) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData3 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesDData3 " << eventdefinition[i].UsesDData3 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData3 " << eventdefinition[i].DescriptionDData3 << endl;
-                        }
-                        if (! eventdefinition[i].UsesDData4) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " DData4 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " UsesDData4 " << eventdefinition[i].UsesDData4 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionDData4 " << eventdefinition[i].DescriptionDData4 << endl;
-                        }
-                        if (! eventdefinition[i].UsesParameter1) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Parameter1 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " Parameter1 " << eventdefinition[i].Parameter1 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " UsesParameter1 " << eventdefinition[i].UsesParameter1 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionParameter1 " << eventdefinition[i].DescriptionParameter1 << endl;
-                        }
-                        if (! eventdefinition[i].UsesParameter2) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Parameter2 not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " Parameter2 " << eventdefinition[i].Parameter2 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " UsesParameter2 " << eventdefinition[i].UsesParameter2 << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionParameter2 " << eventdefinition[i].DescriptionParameter2 << endl;
-                        }
-                        if (! eventdefinition[i].UsesTolerance) {
-                            if (debug >= 2) cerr << p << std::setw(3) << std::right << i << " Tolerance not used " << endl;
-                        } else {
-                            cerr << p << std::setw(3) << std::right << i << " Tolerance " << eventdefinition[i].Tolerance << endl;
-                            cerr << p << std::setw(3) << std::right << i << " UsesTolerance " << eventdefinition[i].UsesTolerance << endl;
-                            cerr << p << std::setw(3) << std::right << i << " DescriptionTolerance " << eventdefinition[i].DescriptionTolerance << endl;
-                        }
+                        PRINT_EVENTDEF_VAR2(c, IData1);
+                        PRINT_EVENTDEF_VAR2(c, IData2);
+                        PRINT_EVENTDEF_VAR2(c, DData1);
+                        PRINT_EVENTDEF_VAR2(c, DData2);
+                        PRINT_EVENTDEF_VAR2(c, DData3);
+                        PRINT_EVENTDEF_VAR2(c, DData4);
+                        PRINT_EVENTDEF_VAR3(c, Parameter1);
+                        PRINT_EVENTDEF_VAR3(c, Parameter2);
+                        PRINT_EVENTDEF_VAR3(c, Tolerance);
+                        cerr << endl;
                     }
                 }
                 // print channel names
-                cerr << p << "XML is unpacked. EventDef Class:ID:Type :" << endl;
-                cerr << p; for (auto c : eventdefinition) cerr << c.Class << ":" << c.ID << ":" << c.Type << ", "; cerr << endl;
+                cerr << p << "XML is unpacked. " << definitioncount << " event definitions: eventdef_index:Class:ID:Type :" << endl;
+                cerr << p;
+                for (auto c : eventdefinition)
+                    cerr << c.eventdef_index << ":" << c.Class << ":" << c.ID << ":" << c.Type << ", ";
+                cerr << endl;
             }
         }
 
@@ -639,30 +812,27 @@ class HPFFile
         void interpret_chunk_index()
         {
             static const string p = pfx(cnm + "::" + "interpret_chunk_index");
-            indexcount = u.buffer64[2];
-            if (index.size()) {
-                cerr << p << "*** index already allocated, has size " << index.size() << endl;
-                exit(1);
-            }
-            index.resize(indexcount);
+            int64_t indexcount = u.buffer64[2];  // the number of index entries in this chunk
             for (auto i = 0; i < indexcount; ++i) {
-                index[i].datastartindex                = u.buffer64[3 + (2*i)];
-                index[i].perchanneldatalengthinsamples = u.buffer64[4 + (2*i)];
-                index[i].chunkid                       = u.buffer64[5 + (2*i)];
-                index[i].groupid                       = u.buffer64[6 + (2*i)];
-                index[i].fileoffset                    = u.buffer64[7 + (2*i)];
+                index.emplace_back( this,
+                                    u.buffer64[3 + (5*i)],  // constructs a new Index element
+                                    u.buffer64[4 + (5*i)],
+                                    u.buffer64[5 + (5*i)],
+                                    u.buffer64[6 + (5*i)],
+                                    u.buffer64[7 + (5*i)] );
+                //index[i].datastartindex                = u.buffer64[3 + (5*i)];
+                //index[i].perchanneldatalengthinsamples = u.buffer64[4 + (5*i)];
+                //index[i].chunkid                       = u.buffer64[5 + (5*i)];
+                //index[i].groupid                       = u.buffer64[6 + (5*i)];
+                //index[i].fileoffset                    = u.buffer64[7 + (5*i)];
             }
             if (debug) {
                 cerr << p << "indexcount         int64_t  : " << i2h(indexcount) << " " << indexcount << endl;
-                cerr << p << "Index*             index[]  : " << endl;
-                for (auto i = 0; i < indexcount; ++i) {
-                    cerr << p << std::setw(10) << std::right << i 
-                        << " datastartindex=" << i2h(index[i].datastartindex) 
-                        << " perchanneldatalengthinsamples=" << i2h(index[i].perchanneldatalengthinsamples) 
-                        << " chunkid=" << i2h(index[i].chunkid) 
-                        << " groupid=" << i2h(index[i].groupid) 
-                        << " fileoffset=" << i2h(index[i].fileoffset) 
-                        << endl;
+                cerr << p << "there are a total of " << index.size() << " index entries now" << endl;
+                cerr << p << "index_entries=" << index_entries << "  index.size()=" << index.size() << endl;
+                cerr << p << "vector<Index>        index  : " << endl;
+                for (auto c : index) {
+                    cerr << c.out() << endl;
                 }
             }
         }
@@ -676,20 +846,13 @@ class HPFFile
         {
             string s;
             switch(id) {
-                case chunkid_header:
-                    s = "header"; break;
-                case chunkid_channelinfo:
-                    s = "channelinfo"; break;
-                case chunkid_data:
-                    s = "data"; break;
-                case chunkid_eventdefinition:
-                    s = "eventdefinition"; break;
-                case chunkid_eventdata:
-                    s = "eventdata"; break;
-                case chunkid_index:
-                    s = "index"; break;
-                default:
-                    s = "UNKNOWN_" + i2h(id); break;
+                case chunkid_header:          s = "header"; break;
+                case chunkid_channelinfo:     s = "channelinfo"; break;
+                case chunkid_data:            s = "data"; break;
+                case chunkid_eventdefinition: s = "eventdefinition"; break;
+                case chunkid_eventdata:       s = "eventdata"; break;
+                case chunkid_index:           s = "index"; break;
+                default:                      s = "UNKNOWN_" + i2h(id); break;
             }
             return s;
         }
@@ -709,6 +872,72 @@ class HPFFile
             else { cerr << "interpret_bool: unknown argument " << s << endl; exit(1); }
         }
 
+        int32_t interpret_event_class(const string& s)
+        {  // just one class, 0x0001 Data Translation Event
+            if (atol(s.c_str()) == 1) return 0x0001;
+            else { cerr << "interpret_event_class: unknown event class " << s << endl; exit(1); }
+        }
+
+        int32_t interpret_event_id(const string& s)
+        {  // multiple per class
+            if (auto id = atol(s.c_str())) return id;
+            else { cerr << "interpret_event_id: event id is 0 or uninterpretable: " << s << endl; exit(1); }
+        }
+
+        int32_t interpret_int32(const string& s)
+        {
+            auto i = atol(s.c_str());
+            // cerr << "interpret_int32: i=" << i << endl;
+            return static_cast<int32_t>(i);
+        }
+
+        int16_t interpret_int16(const string& s)
+        {
+            auto i = atol(s.c_str());
+            // cerr << "interpret_int16: i=" << i << endl;
+            return static_cast<int16_t>(i);
+        }
+
+        double interpret_double(const string& s)
+        {
+            double d = atof(s.c_str());
+            // cerr << "interpret_double: d=" << d << endl;
+            return static_cast<double>(d);
+        }
+
+        string interpret_channel_type(const string& s)
+        {  // three channel types, we should only ever see one
+            string t = ToLower(s);
+            if      (t == "randomdatachannel")   return "RandomDataChannel";
+            // else if (t == "calculatedtimechannel")  return "CalculatedTimeChannel";
+            // else if (t == "monotonicdatachannel")   return "MonotonicDataChannel";
+            else { cerr << "interpret_channel_type: channel type unknown: " << s << endl; exit(1); }
+        }
+
+        string interpret_event_type(const string& s)
+        {  // two event types
+            string t = ToLower(s);
+            if      (t == "point")   return "Point";
+            //else if (t == "ranged")  return "Ranged";
+            else { cerr << "interpret_event_type: event type unknown: " << s << endl; exit(1); }
+        }
+
+        Time interpret_time(const string& s)
+        {  // just int16 for now
+            // cerr << "interpret_time " << s << endl;
+            return Time(s);
+            //string t = ToLower(s);
+            //if      (t == "int16")   return "Int16";
+            //else { cerr << "interpret_datatype: datatype unknown: " << s << endl; exit(1); }
+        }
+
+        string interpret_datatype(const string& s)
+        {  // just int16 for now
+            string t = ToLower(s);
+            if      (t == "int16")   return "Int16";
+            else { cerr << "interpret_datatype: datatype unknown: " << s << endl; exit(1); }
+        }
+
 
 
     public:
@@ -722,49 +951,192 @@ class HPFFile
             static const string pv = pfx(cnm + "::" + "file_status(verbose)", 30);
             streampos beg, end, here;
             auto o = file.is_open();
+            if (file) {
+                if (debug) cerr << p << filename << " : file is 'true'" << endl;
+            } else {
+                if (debug) cerr << p << filename << " : file is 'false'" << endl;
+            }
             if (verbose) {
-                cerr << pv << filename << " is " << (o ? "" : "not ") << "open" << endl;
+                if (debug) cerr << pv << filename << " is " << (o ? "" : "not ") << "open" << endl;
             }
             if (o) {
                 here = file.tellg();
-                auto here_chunks = static_cast<double>(here) / chunksz;  // cast so division is double to catch fractional chunks
-                file.seekg(0, ios::beg);
-                beg = file.tellg();
-                file.seekg(0, ios::end);
-                end = file.tellg();
-                file.seekg(here);
-                if (verbose)
-                    cerr << pv << filename << " size is " << (end - beg) << " bytes" << endl;
-                cerr << p << filename 
-                    << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)" 
-                    << " cursz[size of last chunk read]=" << i2h(cursz) 
-                    << endl;
+                auto here_chunks = static_cast<double>(here) / defaultchunksz;  // cast so division is double to catch fractional chunks
+                if (debug) {
+                    cerr << p << filename
+                        << " filesize=" << filesize << " " << i2h(filesize) << " bytes"
+                        << " curpos=" << here << " " << i2h(here) << " (" << here_chunks << " 64KB chunks from beg)"
+                        << " curchunkfilepos=" << i2h(curchunkfilepos)
+                        << " curchunksz=" << i2h(curchunksz)
+                        << endl;
+                }
             }
+            //return o && here != filesize;
             return o;
         }
 
         void dump()
         {
             static const string p = pfx(cnm + "::" + "dump", 20);
-            cerr << p << "chunksz=" << chunksz 
-                << " sizeof(int64_t)=" << sizeof(int64_t) 
-                << " int64_count=" << int64_count 
-                << " filename=" << filename 
-                << " pos=" << pos 
+            cerr << p << "defaultchunksz=" << defaultchunksz
+                << " sizeof(int64_t)=" << sizeof(int64_t)
+                << " int64_count=" << int64_count
+                << " filename=" << filename
+                << " pos=" << pos
                 << endl;
             file_status(true);
         }
+
+        void summarise_data()
+        {
+            static const string p = pfx(cnm + "::" + "summarise_data", 20);
+            cerr << p << "channeldata.size()=" << channeldata.size()
+                << endl;
+            for (auto c : channeldata) {
+                cerr << p << "[" << std::setw(2) << std::right << c._index << "]";
+                cerr << " data.size()=" << c.data.size();
+                auto i = 0, j = 20;
+                for (auto d : c.data) {
+                    cerr << " " << d;
+                    if (++i >= j) { cerr << " ..."; break; }
+                }
+                cerr << endl;
+            }
+        }
+
+        string table_header_csv(const string sep = ",") const
+        {
+            stringstream ss;
+            ss << "RecordingDate :" << sep << recdate << endl
+                << "FromSample(TimeOfDay):" << sep << "xx:xx:xx.xxx" << endl
+                << "ToSample(TimeOfDay):" << sep << "yy:yy:yy.yyy" << endl
+                << "" << sep << "" << endl
+                << "Channels Recorded " << sep << "" << numberofchannels << endl
+                << "PerChannelSamplingFreq :" << sep << "" << setprecision(15) << channelinfo[0].PerChannelSampleRate << endl
+                << "" << sep << "" << endl;
+            // channelinfo
+            ss << "ChannelName" << sep << "ChannelNumber" << sep << "Units" << sep << "DataType" << sep 
+                << "RangeMin" << sep << "RangeMax" << sep << "DataScale" << sep << "DataOffset" << sep
+                << "SensorScale" << sep << "SensorOffset" << endl;
+            for (auto c : channelinfo) {
+                ss << c.Name
+                    << sep << c.DataIndex
+                    << sep << c.Unit
+                    << sep << c.DataType
+                    << sep << c.RangeMin
+                    << sep << c.RangeMax
+                    << sep << c.DataScale
+                    << sep << c.DataOffset
+                    << sep << c.SensorScale
+                    << sep << c.SensorOffset
+                    << endl;
+            }
+            ss << "" << sep << "" << endl;
+            for (auto i = 0; i < numberofchannels; ++i) {
+                ss << channelinfo[i].Name;
+                if (i < numberofchannels - 1)
+                    ss << sep;
+            }
+            ss << endl;
+            return ss.str();
+        }
+        string table_from_data_csv(const vector<ChannelDescriptor>& cd,
+                                   const string sep = ",")
+            // output all data in channeldata[] using channeldescriptor[]
+        {
+            if (table_data_lines == 0) { // this is the first data, so drop the header first
+                cout << table_header_csv();
+            }
+            stringstream ss;
+            // fetch the number of items from the first channel descriptor
+            auto n = cd[0]._num_atoms;
+
+            for (auto i = 0; i < n; ++i) {
+                table_data_lines++;  // the line of data in the table (all lines)
+                for (auto j = 0; j < numberofchannels; ++j) {  // across each column/channel
+                    ss << setprecision(15) << channelinfo[j].interpret_as_volts(channeldata[j].data[i]);
+                    if (j < numberofchannels - 1)
+                        ss << sep;
+                }
+                ss << endl;
+            }
+            return ss.str();
+        }
+
+        string table_header(const string sep = "\t") const
+        {
+            stringstream ss;
+            ss << "# creatorid=" << i2h(creatorid)
+                << " creatorid_s=" << creatorid_s
+                << " fileversion=" << i2h(fileversion)
+                << endl;
+            ss << "# RecordingDate=" << recdate
+                << " rectime=" << rectime
+                << endl;
+            ss << "# GroupID=" << groupid
+                << " numberofchannels=" << numberofchannels
+                << endl;
+            // per-column header rows. columns are
+            // index/type \t time \t ch0 \t ch1 \t ... ch23
+            ss << "# Name" << sep << "0";     for (auto c : channelinfo) ss << sep << c.Name;     ss << endl;
+            ss << "# Datatype" << sep << "0"; for (auto c : channelinfo) ss << sep << c.DataType; ss << endl;
+            ss << "# RangeMin" << sep << "0"; for (auto c : channelinfo) ss << sep << c.RangeMin; ss << endl;
+            ss << "# RangeMax" << sep << "0"; for (auto c : channelinfo) ss << sep << c.RangeMax; ss << endl;
+            ss << "Index" << sep << "Time";   for (auto c : channelinfo) ss << sep << c.Name;     ss << endl;
+            return ss.str();
+        }
+        string table_from_data(const vector<ChannelDescriptor>& cd,
+                               const string sep = "\t")
+            // output all data in channeldata[] using channeldescriptor[]
+        {
+            if (table_data_lines == 0) { // this is the first data, so drop the header first
+                cout << table_header();
+            }
+            stringstream ss;
+            // fetch the number of items from the first channel descriptor
+            auto n = cd[0]._num_atoms;
+
+            for (auto i = 0; i < n; ++i) {
+                ss << table_data_lines++;  // the line of data in the table (all lines)
+                ss << sep << "time";  // the time of this data point
+                for (auto c : channeldata) {  // across each channel
+                    ss << sep << c.data[i];
+                }
+                ss << endl;
+            }
+            return ss.str();
+        }
+
+
 };
+
+std::ostream& operator<<(std::ostream& os, const HPFFile::Time& t)     { return os << t.out(); }
+std::ostream& operator<<(std::ostream& os, const HPFFile::DataType& t) { return os << t.out(); }
+
+
 
 int main ()
 {
     HPFFile h("t.hpf");
     if (! h.file_status())
         exit(1);
-    h.read_chunk();
-    h.read_chunk();
-    h.read_chunk();
+    while (h.read_chunk());
+    if (0) {
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+    }
     //h.read_chunk();
+
+    // h.summarise_data();
+    cout << "," << endl
+    cout << "," << endl
 }
 
 
