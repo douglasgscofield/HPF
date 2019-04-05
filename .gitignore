@@ -1,6 +1,7 @@
 # project-specific files
 *.hpf
 *.csv
+*.diff
 hpf
 tags
 x
