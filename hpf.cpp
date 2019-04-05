@@ -64,11 +64,15 @@ class HPFFile
 
         const string cnm = "";//"HPFFile";
         unsigned char debug = 0;  // if > 0, print lots of info to cerr
+        bool    do_downsample = true;
+        int16_t downsample_count = 1000;  // only output every downsample_count-th reading
         bool table = true;  // if true, print data table to cout
         streampos filebeg;  // beginning of the file opened, set by the constructor
         streampos fileend;  // end of the file opened, set by the constructor
         streampos filesize;  // size of the file opened, set by the constructor
+        int64_t   data_lines       = 0;  // number of data lines
         int64_t   table_data_lines = 0;  // number of data lines in the table
+        bool      include_data_line = false;  // prefix output lines with data line?
 
         ////
         //// buffer
@@ -1012,8 +1016,11 @@ class HPFFile
                 << "ToSample(TimeOfDay):" << sep << "yy:yy:yy.yyy" << endl
                 << "" << sep << "" << endl
                 << "Channels Recorded " << sep << "" << numberofchannels << endl
-                << "PerChannelSamplingFreq :" << sep << "" << setprecision(15) << channelinfo[0].PerChannelSampleRate << endl
-                << "" << sep << "" << endl;
+                << "PerChannelSamplingFreq :" << sep << "" << setprecision(15) << channelinfo[0].PerChannelSampleRate << endl;
+            if (do_downsample) {
+                ss << "DownsampleCount :" << sep << "" << downsample_count << endl;
+            }
+            ss << "" << sep << "" << endl;
             // channelinfo
             ss << "ChannelName" << sep << "ChannelNumber" << sep << "Units" << sep << "DataType" << sep 
                 << "RangeMin" << sep << "RangeMax" << sep << "DataScale" << sep << "DataOffset" << sep
@@ -1032,6 +1039,8 @@ class HPFFile
                     << endl;
             }
             ss << "" << sep << "" << endl;
+            if (include_data_line)
+                ss << "data_line" << sep;
             for (auto i = 0; i < numberofchannels; ++i) {
                 ss << channelinfo[i].Name;
                 if (i < numberofchannels - 1)
@@ -1052,7 +1061,15 @@ class HPFFile
             auto n = cd[0]._num_atoms;
 
             for (auto i = 0; i < n; ++i) {
+                ++data_lines;  // the line of data in the table (all lines)
+                if (do_downsample && (data_lines - 1) % downsample_count) {
+                    // if we are downsampling, only output lines where (data_lines - 1) mod downsample_count == 0
+                    // so skip this line
+                    continue;
+                }
                 table_data_lines++;  // the line of data in the table (all lines)
+                if (include_data_line)
+                    ss << (data_lines - 0) << sep;
                 for (auto j = 0; j < numberofchannels; ++j) {  // across each column/channel
                     ss << setprecision(15) << channelinfo[j].interpret_as_volts(channeldata[j].data[i]);
                     if (j < numberofchannels - 1)
@@ -1062,52 +1079,6 @@ class HPFFile
             }
             return ss.str();
         }
-
-        string table_header(const string sep = "\t") const
-        {
-            stringstream ss;
-            ss << "# creatorid=" << i2h(creatorid)
-                << " creatorid_s=" << creatorid_s
-                << " fileversion=" << i2h(fileversion)
-                << endl;
-            ss << "# RecordingDate=" << recdate
-                << " rectime=" << rectime
-                << endl;
-            ss << "# GroupID=" << groupid
-                << " numberofchannels=" << numberofchannels
-                << endl;
-            // per-column header rows. columns are
-            // index/type \t time \t ch0 \t ch1 \t ... ch23
-            ss << "# Name" << sep << "0";     for (auto c : channelinfo) ss << sep << c.Name;     ss << endl;
-            ss << "# Datatype" << sep << "0"; for (auto c : channelinfo) ss << sep << c.DataType; ss << endl;
-            ss << "# RangeMin" << sep << "0"; for (auto c : channelinfo) ss << sep << c.RangeMin; ss << endl;
-            ss << "# RangeMax" << sep << "0"; for (auto c : channelinfo) ss << sep << c.RangeMax; ss << endl;
-            ss << "Index" << sep << "Time";   for (auto c : channelinfo) ss << sep << c.Name;     ss << endl;
-            return ss.str();
-        }
-        string table_from_data(const vector<ChannelDescriptor>& cd,
-                               const string sep = "\t")
-            // output all data in channeldata[] using channeldescriptor[]
-        {
-            if (table_data_lines == 0) { // this is the first data, so drop the header first
-                cout << table_header();
-            }
-            stringstream ss;
-            // fetch the number of items from the first channel descriptor
-            auto n = cd[0]._num_atoms;
-
-            for (auto i = 0; i < n; ++i) {
-                ss << table_data_lines++;  // the line of data in the table (all lines)
-                ss << sep << "time";  // the time of this data point
-                for (auto c : channeldata) {  // across each channel
-                    ss << sep << c.data[i];
-                }
-                ss << endl;
-            }
-            return ss.str();
-        }
-
-
 };
 
 std::ostream& operator<<(std::ostream& os, const HPFFile::Time& t)     { return os << t.out(); }
@@ -1117,7 +1088,7 @@ std::ostream& operator<<(std::ostream& os, const HPFFile::DataType& t) { return 
 
 int main ()
 {
-    HPFFile h("t.hpf");
+    HPFFile h("22_11_2018_1.hpf");
     if (! h.file_status())
         exit(1);
     while (h.read_chunk());
@@ -1131,12 +1102,29 @@ int main ()
         h.read_chunk();
         h.read_chunk();
         h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
+        h.read_chunk();
     }
     //h.read_chunk();
 
     // h.summarise_data();
-    cout << "," << endl
-    cout << "," << endl
+    cout << "," << endl;
+    cout << "," << endl;
 }
 
 
