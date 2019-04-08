@@ -73,6 +73,7 @@ class HPFFile
         int64_t   data_lines       = 0;  // number of data lines
         int64_t   table_data_lines = 0;  // number of data lines in the table
         bool      include_data_line = false;  // prefix output lines with data line?
+#define DEFAULT_SEP "\t"
 
         ////
         //// buffer
@@ -1008,39 +1009,41 @@ class HPFFile
             }
         }
 
-        string table_header_csv(const string sep = ",") const
+        string table_header_csv(bool minimal = false, const string sep = DEFAULT_SEP) const
         {
             stringstream ss;
-            ss << "RecordingDate :" << sep << recdate << endl
-                << "FromSample(TimeOfDay):" << sep << "xx:xx:xx.xxx" << endl
-                << "ToSample(TimeOfDay):" << sep << "yy:yy:yy.yyy" << endl
-                << "" << sep << "" << endl
-                << "Channels Recorded " << sep << "" << numberofchannels << endl
-                << "PerChannelSamplingFreq :" << sep << "" << setprecision(15) << channelinfo[0].PerChannelSampleRate << endl;
-            if (do_downsample) {
-                ss << "DownsampleCount :" << sep << "" << downsample_count << endl;
+            if (! minimal) {
+                ss << "RecordingDate :" << sep << recdate << endl
+                    << "FromSample(TimeOfDay):" << sep << "xx:xx:xx.xxx" << endl
+                    << "ToSample(TimeOfDay):" << sep << "yy:yy:yy.yyy" << endl
+                    << "" << sep << "" << endl
+                    << "Channels Recorded " << sep << "" << numberofchannels << endl
+                    << "PerChannelSamplingFreq :" << sep << "" << setprecision(15) << channelinfo[0].PerChannelSampleRate << endl;
+                if (do_downsample) {
+                    ss << "DownsampleCount :" << sep << "" << downsample_count << endl;
+                }
+                ss << "" << sep << "" << endl;
+                // channelinfo
+                ss << "ChannelName" << sep << "ChannelNumber" << sep << "Units" << sep << "DataType" << sep 
+                    << "RangeMin" << sep << "RangeMax" << sep << "DataScale" << sep << "DataOffset" << sep
+                    << "SensorScale" << sep << "SensorOffset" << endl;
+                for (auto c : channelinfo) {
+                    ss << c.Name
+                        << sep << c.DataIndex
+                        << sep << c.Unit
+                        << sep << c.DataType
+                        << sep << c.RangeMin
+                        << sep << c.RangeMax
+                        << sep << c.DataScale
+                        << sep << c.DataOffset
+                        << sep << c.SensorScale
+                        << sep << c.SensorOffset
+                        << endl;
+                }
+                ss << "" << sep << "" << endl;
+                if (include_data_line)
+                    ss << "data_line" << sep;
             }
-            ss << "" << sep << "" << endl;
-            // channelinfo
-            ss << "ChannelName" << sep << "ChannelNumber" << sep << "Units" << sep << "DataType" << sep 
-                << "RangeMin" << sep << "RangeMax" << sep << "DataScale" << sep << "DataOffset" << sep
-                << "SensorScale" << sep << "SensorOffset" << endl;
-            for (auto c : channelinfo) {
-                ss << c.Name
-                    << sep << c.DataIndex
-                    << sep << c.Unit
-                    << sep << c.DataType
-                    << sep << c.RangeMin
-                    << sep << c.RangeMax
-                    << sep << c.DataScale
-                    << sep << c.DataOffset
-                    << sep << c.SensorScale
-                    << sep << c.SensorOffset
-                    << endl;
-            }
-            ss << "" << sep << "" << endl;
-            if (include_data_line)
-                ss << "data_line" << sep;
             for (auto i = 0; i < numberofchannels; ++i) {
                 ss << channelinfo[i].Name;
                 if (i < numberofchannels - 1)
@@ -1050,11 +1053,11 @@ class HPFFile
             return ss.str();
         }
         string table_from_data_csv(const vector<ChannelDescriptor>& cd,
-                                   const string sep = ",")
+                                   const string sep = DEFAULT_SEP)
             // output all data in channeldata[] using channeldescriptor[]
         {
             if (table_data_lines == 0) { // this is the first data, so drop the header first
-                cout << table_header_csv();
+                cout << table_header_csv(true);
             }
             stringstream ss;
             // fetch the number of items from the first channel descriptor
@@ -1086,9 +1089,15 @@ std::ostream& operator<<(std::ostream& os, const HPFFile::DataType& t) { return 
 
 
 
-int main ()
+int 
+main(int argc, char* argv[])
 {
-    HPFFile h("22_11_2018_1.hpf");
+    string file;
+    if (argc > 1)
+        file.assign(argv[1]);
+    else
+        cerr << "*** Must provide filename as only argument:  " << argv[0] << " file.hpf" << endl;
+    HPFFile h(file);
     if (! h.file_status())
         exit(1);
     while (h.read_chunk());
@@ -1123,8 +1132,8 @@ int main ()
     //h.read_chunk();
 
     // h.summarise_data();
-    cout << "," << endl;
-    cout << "," << endl;
+    //cout << "," << endl;
+    //cout << "," << endl;
 }
 
 
