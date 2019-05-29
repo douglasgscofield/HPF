@@ -62,29 +62,29 @@ class HPFFile
 
     public:
 
-        const string cnm = "";//"HPFFile";
-        unsigned char debug = 0;  // if > 0, print lots of info to cerr
-        bool    do_downsample = true;
-        int16_t downsample_count = 1000;  // only output every downsample_count-th reading
-        bool table = true;  // if true, print data table to cout
-        streampos filebeg;  // beginning of the file opened, set by the constructor
-        streampos fileend;  // end of the file opened, set by the constructor
-        streampos filesize;  // size of the file opened, set by the constructor
-        int64_t   data_lines       = 0;  // number of data lines
-        int64_t   table_data_lines = 0;  // number of data lines in the table
-        bool      include_data_line = false;  // prefix output lines with data line?
+        const string  cnm               = "HPFFile";
+        unsigned char debug             = 0;     // if > 0, print lots of info to cerr
+        bool          do_downsample     = true;
+        int16_t       downsample_count  = 1000;  // only output every downsample_count-th reading
+        bool          table             = true;  // if true, print data table to cout
+        streampos     filebeg;                   // beginning of the file opened, set by the constructor
+        streampos     fileend;                   // end of the file opened, set by the constructor
+        streampos     filesize;                  // size of the file opened, set by the constructor
+        int64_t       data_lines        = 0;     // number of data lines
+        int64_t       table_data_lines  = 0;     // number of data lines in the table
+        bool          include_data_line = false; // prefix output lines with data line?
 #define DEFAULT_SEP "\t"
 
         ////
         //// buffer
         ////
         static const size_t defaultchunksz = 64 * 1024; // 64KB chunks are the default with HPF files
-        static const size_t buffersz = 1024 * 1024; // 1024KB is the largest chunk size we allow for now
+        static const size_t buffersz       = 1024 * 1024; // 1024KB is the largest chunk size we allow for now
 
-        static const size_t int64_count = buffersz / sizeof(int64_t);  // number of 64-bit atoms
-        static const size_t int32_count = buffersz / sizeof(int32_t);  // number of 32-bit atoms
-        static const size_t int16_count = buffersz / sizeof(int16_t);  // number of 16-bit atoms
-        static const size_t int8_count  = buffersz / sizeof(int8_t);   // number of 8-bit atoms
+        static const size_t int64_count    = buffersz / sizeof(int64_t);  // number of 64-bit atoms
+        static const size_t int32_count    = buffersz / sizeof(int32_t);  // number of 32-bit atoms
+        static const size_t int16_count    = buffersz / sizeof(int16_t);  // number of 16-bit atoms
+        static const size_t int8_count     = buffersz / sizeof(int8_t);   // number of 8-bit atoms
 
     private:
 
@@ -135,9 +135,7 @@ class HPFFile
             long y, m, d, h, n, s, x;
             double frac_s;  // fractional seconds
             Time(const string& t = "")
-                // : s_time(t)
             {
-                //interpret(s_time);
                 interpret(t);
             };
             string out() const {
@@ -185,9 +183,7 @@ class HPFFile
             bool    is_fp;
             DataType(const string& t = "")
                 : s_datatype(t), str(t), size_bytes(0), is_signed(false), is_fp(false)
-                //
             {
-                //interpret(s_time);
                 interpret(t);
             };
             string out() const {
@@ -452,9 +448,6 @@ class HPFFile
                     << " chunkid : " << chunkid << " " << i2h(chunkid) << " " << chunkid_s 
                     << " curchunksz : " << curchunksz << " " << i2h(curchunksz)
                     << endl;
-                //cerr << p << "curchunkfilepos    streampos: " << curchunkfilepos << " " << i2h(curchunkfilepos) << endl;
-                //cerr << p << "chunkid            int64_t  : " << chunkid << " " << i2h(chunkid) << " " << chunkid_s << endl;
-                //cerr << p << "curchunksz         int64_t  : " << curchunksz << " " << i2h(curchunksz) << endl;
             }
             switch(chunkid) {
                 case chunkid_header:
@@ -502,7 +495,6 @@ class HPFFile
             }
             recdate.assign(text(root));
             rectime.interpret(recdate);
-            //rectime.interpret(recdate);
             if (debug) {
                 cerr << p << "XML is unpacked. Name:recdate:rectime :" << endl;
                 cerr << p << root->Name() << ":" << recdate << ":" << rectime << endl;
@@ -540,7 +532,7 @@ class HPFFile
             for (auto chinfo : root)
             {
                 for_each (cbegin(chinfo), cend(chinfo),
-                        [this, i](auto x) {
+                        [this, i](auto x) {  // note the lambda
                         channelinfo[i]._index = i;
                         channeldata[i]._index = i;
                         if (debug >= 3) {
@@ -555,23 +547,22 @@ class HPFFile
                         else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], Unit)
                         else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], ChannelType)
                         else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], AssignedTimeChannelIndex, interpret_int32)
-                        //else if MATCH_SET_ASSIGN_VAR  ( x, channelinfo[i], DataType, interpret)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataType, interpret_datatype)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataIndex, interpret_int32)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], StartTime, interpret_time)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], TimeIncrement, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMin, interpret_int16)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMax, interpret_int16)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataScale, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataOffset, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorScale, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorOffset, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PerChannelSampleRate, interpret_double)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PhysicalChannelNumber, interpret_int32)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UsesSensorValues, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataType,                 interpret_datatype)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataIndex,                interpret_int32)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], StartTime,                interpret_time)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], TimeIncrement,            interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMin,                 interpret_int16)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], RangeMax,                 interpret_int16)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataScale,                interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], DataOffset,               interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorScale,              interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], SensorOffset,             interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PerChannelSampleRate,     interpret_double)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], PhysicalChannelNumber,    interpret_int32)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UsesSensorValues,         interpret_bool)
                         else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], ThermocoupleType)
                         else if MATCH_SET_STRING_VAR  ( x, channelinfo[i], TemperatureUnit)
-                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UseThermocoupleValues, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR ( x, channelinfo[i], UseThermocoupleValues,    interpret_bool)
                         else { cerr << "*** Unknown child of ChannelInformation: " << x->Name() << endl; exit(1); }
                         });
                 ++i;
@@ -619,7 +610,6 @@ class HPFFile
         void interpret_chunk_data()
         {
             static const string p = pfx(cnm + "::" + "interpret_chunk_data");
-            //groupid = u.buffer32[4];
             if (u.buffer32[4] != groupid) {
                 cerr << p << "*** groupid as recorded in data chunk " << u.buffer32[4] << " does not match groupid as recorded in channelinfo " << groupid << endl;
                 exit(1);
@@ -675,7 +665,6 @@ class HPFFile
                 }
             }
             // Output the lines of data we read
-            //cout << table_from_data(channeldescriptor);
             cout << table_from_data_csv(channeldescriptor);
             // Clear channeldata[].data
             for (auto c : channeldata) {
@@ -710,21 +699,20 @@ class HPFFile
             auto i = 0 * definitioncount;
             for (auto evdef : root)
             {
-                //auto i = atol(text(evdef->FirstChildElement("DataIndex")).c_str());
                 for_each (cbegin(evdef), cend(evdef),
-                        [this, i](auto x) {
+                        [this, i](auto x) {  // note the lambda
                         eventdefinition[i].eventdef_index = i;
                         if      MATCH_SET_STRING_VAR ( x, eventdefinition[i], Name)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Description)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Class, interpret_event_class)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], ID, interpret_event_id)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Type, interpret_event_type)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData1, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData2, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData1, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData2, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData3, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData4, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Class,          interpret_event_class)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], ID,             interpret_event_id)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], Type,           interpret_event_type)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData1,     interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesIData2,     interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData1,     interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData2,     interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData3,     interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesDData4,     interpret_bool)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionIData1)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionIData2)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionDData1)
@@ -736,7 +724,7 @@ class HPFFile
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], Tolerance)
                         else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesParameter1, interpret_bool)
                         else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesParameter2, interpret_bool)
-                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesTolerance, interpret_bool)
+                        else if MATCH_SET_CONVERT_VAR( x, eventdefinition[i], UsesTolerance,  interpret_bool)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionParameter1)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionParameter2)
                         else if MATCH_SET_STRING_VAR ( x, eventdefinition[i], DescriptionTolerance)
@@ -825,11 +813,6 @@ class HPFFile
                                     u.buffer64[5 + (5*i)],
                                     u.buffer64[6 + (5*i)],
                                     u.buffer64[7 + (5*i)] );
-                //index[i].datastartindex                = u.buffer64[3 + (5*i)];
-                //index[i].perchanneldatalengthinsamples = u.buffer64[4 + (5*i)];
-                //index[i].chunkid                       = u.buffer64[5 + (5*i)];
-                //index[i].groupid                       = u.buffer64[6 + (5*i)];
-                //index[i].fileoffset                    = u.buffer64[7 + (5*i)];
             }
             if (debug) {
                 cerr << p << "indexcount         int64_t  : " << i2h(indexcount) << " " << indexcount << endl;
