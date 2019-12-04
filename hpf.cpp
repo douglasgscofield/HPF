@@ -57,7 +57,7 @@ string ToLower(const string& s)
 class HPFFile
 {
     ////
-    //// HPFFile opens a binary file it HPF format and reads/converts the chunks of data
+    //// HPFFile opens a binary file in HPF format and reads/converts the chunks of data
     ////
 
     public:
@@ -911,12 +911,8 @@ class HPFFile
         }
 
         Time interpret_time(const string& s)
-        {  // just int16 for now
-            // cerr << "interpret_time " << s << endl;
+        {  // fully interpret Time
             return Time(s);
-            //string t = ToLower(s);
-            //if      (t == "int16")   return "Int16";
-            //else { cerr << "interpret_datatype: datatype unknown: " << s << endl; exit(1); }
         }
 
         string interpret_datatype(const string& s)
@@ -1084,16 +1080,8 @@ main(int argc, char* argv[])
     if (! h.file_status())
         exit(1);
     while (h.read_chunk());
-    if (0) {
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
-        h.read_chunk();
+  
+    if (0) {  // for debugging; dump the first several chunks
         h.read_chunk();
         h.read_chunk();
         h.read_chunk();
