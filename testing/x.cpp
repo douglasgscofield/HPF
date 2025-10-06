@@ -21,7 +21,7 @@ std::string i2hp( T i )
 
 uint64_t ww2W( uint32_t w1, uint32_t w2 )
 {
-    int64_t ans;
+    uint64_t ans = 0;
     cout << "w1=" << i2hp(w1) << " sizeof=" << sizeof(w1)*8
          << " w2=" << i2hp(w2) << " sizeof=" << sizeof(w2)*8
          << " ans=" << i2hp(ans) << " sizeof=" << sizeof(ans)*8
@@ -44,8 +44,8 @@ int main() {
     uint32_t b = 0x22334455;
     uint64_t c = ww2W(a, b);
     cout << "a=" << i2hp(a)
-         << "b=" << i2hp(b)
-         << "c=" << i2hp(c)
+         << "  b=" << i2hp(b)
+         << "  c=" << i2hp(c)
          << endl;
 }
 
